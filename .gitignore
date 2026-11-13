@@ -1,0 +1,31 @@
+# PlatformIO & Embedded
+.pio/
+.pioenvs/
+.piolibdeps/
+*.elf
+*.bin
+
+# Ambiente e Chaves Secretas (NUNCA SUBIR AO GITHUB)
+.env
+*.env
+!.env.example
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.venv/
+env/
+venv/
+ENV/
+
+# Arquivos de Áudio temporários
+*.mp3
+*.wav
+
+# IDEs
+.vscode/
+.idea/
+*.sublime-project
+*.sublime-workspace

@@ -6,11 +6,12 @@ import threading
 import winsound
 from datetime import datetime
 import serial
+import requests
 import speech_recognition as sr
 import win32com.client
 from dotenv import load_dotenv
 
-# Carrega variáveis de ambiente (.env)
+# Carrega configurações
 load_dotenv()
 
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "").strip()
@@ -24,7 +25,7 @@ for v in speaker.GetVoices():
     if "Portuguese" in v.GetDescription() or "Maria" in v.GetDescription():
         speaker.Voice = v
         break
-speaker.Rate = 2  # Fala um pouco mais rápida e dinâmica
+speaker.Rate = 2
 
 # Conexão Serial com o ESP32-S3
 ser = None
@@ -33,33 +34,32 @@ try:
     time.sleep(1.0)
     print(f"[OK] Conectado ao ESP32-S3 na porta {SERIAL_PORT}")
 except Exception as e:
-    print(f"[AVISO] Nao foi possivel abrir {SERIAL_PORT}: {e}")
-    print("Modo de simulacao ativo para o hardware.")
+    print(f"[AVISO] Porta {SERIAL_PORT} nao disponivel ({e}). Modo de simulacao ativo.")
 
 def send_esp_cmd(cmd: str):
-    """Envia comandos para a placa ESP32 e recebe confirmacao."""
+    """Envia comandos para a placa ESP32."""
     global ser
     if ser and ser.is_open:
         try:
             ser.write((cmd.strip() + "\n").encode())
-            time.sleep(0.05)
+            time.sleep(0.04)
             while ser.in_waiting:
                 ser.readline()
         except Exception as e:
             print(f"[ERRO SERIAL] {e}")
 
 def set_state(state: str):
-    """Define o estado do robo no ESP32: IDLE, LISTEN, THINK, SPEAK, ALERT"""
+    """Muda estado visual no ESP32: IDLE, LISTEN, THINK, SPEAK, ALERT"""
     print(f"[ESTADO] -> {state}")
     send_esp_cmd(f"STATE:{state}")
 
 def set_rgb(r: int, g: int, b: int):
-    """Define cor customizada no LED RGB onboard."""
+    """Define cor customizada no LED RGB onboard (GPIO 48)."""
     print(f"[RGB] -> R:{r} G:{g} B:{b}")
     send_esp_cmd(f"RGB:{r},{g},{b}")
 
 def falar(texto: str):
-    """Fala o texto em voz alta e atualiza o LED do ESP32 para modo fala."""
+    """Fala o texto em voz alta e anima o LED do ESP32."""
     print(f"\n[CIBORGUE]: {texto}\n")
     set_state("SPEAK")
     try:
@@ -68,173 +68,157 @@ def falar(texto: str):
         print(f"[ERRO VOZ] {e}")
     set_state("IDLE")
 
-# Inicialização da API do Gemini
-gemini_client = None
-if GEMINI_API_KEY and GEMINI_API_KEY != "SUA_CHAVE_AQUI":
-    try:
-        from google import genai
-        from google.genai import types
-        gemini_client = genai.Client(api_key=GEMINI_API_KEY)
-        print("[OK] Gemini AI conectado com sucesso!")
-    except Exception as e:
-        print(f"[ERRO GEMINI] {e}")
-else:
-    print("\n[ATENCAO] Adicione sua GEMINI_API_KEY no arquivo .env!")
-
-# Definição das Ferramentas (Tool / Function Calling) do Ciborgue
+# Mapeamento de cores
 COLOR_MAP = {
     "vermelho": (255, 0, 0),
+    "vermelha": (255, 0, 0),
     "verde": (0, 255, 0),
     "azul": (0, 0, 255),
     "amarelo": (255, 200, 0),
+    "amarela": (255, 200, 0),
     "roxo": (200, 0, 255),
+    "roxa": (200, 0, 255),
     "ciano": (0, 255, 255),
     "branco": (255, 255, 255),
+    "branca": (255, 255, 255),
     "laranja": (255, 80, 0),
     "rosa": (255, 20, 147),
     "apagado": (0, 0, 0),
+    "desligado": (0, 0, 0),
     "desligar": (0, 0, 0)
 }
 
 def tool_mudar_cor_led(cor: str) -> str:
-    """Muda a cor do LED RGB no corpo do robo (ESP32). Ex: vermelho, verde, azul, roxo, amarelo, desligar."""
     c = cor.lower().strip()
     if c in COLOR_MAP:
         r, g, b = COLOR_MAP[c]
         set_rgb(r, g, b)
-        return f"Cor do LED alterada para {c} com sucesso."
+        return f"Cor alterada para {c} com sucesso."
     else:
-        set_rgb(100, 100, 100)
-        return f"Cor {cor} nao reconhecida exatamente, coloquei em branco suave."
+        set_rgb(120, 120, 120)
+        return f"Cor {cor} colocada em branco suave."
 
 def tool_obter_hora() -> str:
-    """Retorna a hora e data atual."""
     agora = datetime.now()
-    return agora.strftime("Agora sao %H horas e %M minutos de %d/%m/%Y.")
+    return agora.strftime("Agora sao %H horas e %M minutos.")
 
-def tool_mover_robo(direcao: str, angulo: int = 45) -> str:
-    """Prepara o movimento dos servo-motores do robo (cabeca/corpo). Ex: esquerda, direita, frente, cima."""
-    print(f"[MOVIMENTO] Movendo para {direcao} no angulo {angulo} graus.")
-    return f"Movimento para {direcao} em {angulo} graus executado."
+# Declaração de ferramentas para a API REST do Gemini
+GEMINI_TOOLS = [{
+    "function_declarations": [
+        {
+            "name": "mudar_cor_led",
+            "description": "Altera a cor do LED RGB no corpo do robô no ESP32.",
+            "parameters": {
+                "type": "OBJECT",
+                "properties": {
+                    "cor": {"type": "STRING", "description": "Nome da cor em português (ex: vermelho, verde, azul, amarelo, roxo, ciano, rosa, desligar)"}
+                },
+                "required": ["cor"]
+            }
+        },
+        {
+            "name": "obter_hora",
+            "description": "Obtém as horas e minutos atuais.",
+            "parameters": {"type": "OBJECT", "properties": {}}
+        }
+    ]
+}]
 
 def processar_ia(pergunta: str):
-    """Envia a pergunta para o Gemini com raciocinio e execucao de funcoes."""
-    global gemini_client
-    if not gemini_client:
-        falar("Por favor, configure sua chave de API do Gemini no arquivo .env para que eu possa pensar.")
+    """Consulta o modelo Gemini 3 Flash com suporte nativo a ferramentas."""
+    if not GEMINI_API_KEY:
+        falar("Chave de API do Gemini não encontrada no arquivo .env.")
         return
 
     set_state("THINK")
-    system_instruction = (
+    url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-3-flash-preview:generateContent?key={GEMINI_API_KEY}"
+    
+    system_prompt = (
         "Você é o 'Ciborgue', um robôzinho de mesa inteligente, amigável e prestativo. "
         "Você é executado em um ESP32-S3 (com LED RGB integrado no pino GPIO 48). "
-        "Suas respostas serão faladas em voz alta, então seja breve, objetivo e natural. "
-        "Evite listas longas e símbolos complexos. "
-        "Quando o usuário pedir para mudar a cor da luz ou do LED, use a função correspondente. "
-        "Quando o usuário perguntar as horas, use a função de obter hora."
+        "Suas respostas serão faladas em voz alta, então seja breve, direto e conversacional. "
+        "Quando o usuário pedir para mudar a cor da luz ou do LED, chame a função mudar_cor_led. "
+        "Quando o usuário perguntar as horas, chame a função obter_hora."
     )
 
+    payload = {
+        "system_instruction": {"parts": [{"text": system_prompt}]},
+        "contents": [{"parts": [{"text": pergunta}]}],
+        "tools": GEMINI_TOOLS
+    }
+
     try:
-        from google.genai import types
+        r = requests.post(url, json=payload, timeout=8)
+        if r.status_code != 200:
+            print(f"[ERRO API] {r.status_code}: {r.text[:200]}")
+            falar("Desculpe, tive uma oscilação na minha conexão de inteligência.")
+            return
 
-        # Configura as ferramentas suportadas
-        tools = [
-            types.Tool(function_declarations=[
-                types.FunctionDeclaration(
-                    name="tool_mudar_cor_led",
-                    description="Muda a cor do LED RGB do corpo do robô no ESP32.",
-                    parameters=types.Schema(
-                        type=types.Type.OBJECT,
-                        properties={
-                            "cor": types.Schema(type=types.Type.STRING, description="Nome da cor em português (ex: vermelho, verde, azul, roxo, amarelo, desligar).")
-                        },
-                        required=["cor"]
-                    )
-                ),
-                types.FunctionDeclaration(
-                    name="tool_obter_hora",
-                    description="Obtém o horário e data atual.",
-                    parameters=types.Schema(
-                        type=types.Type.OBJECT,
-                        properties={}
-                    )
-                ),
-                types.FunctionDeclaration(
-                    name="tool_mover_robo",
-                    description="Move a cabeça ou corpo do robô para uma direção (esquerda, direita, cima, centro).",
-                    parameters=types.Schema(
-                        type=types.Type.OBJECT,
-                        properties={
-                            "direcao": types.Schema(type=types.Type.STRING, description="Direção do movimento"),
-                            "angulo": types.Schema(type=types.Type.INTEGER, description="Ângulo de movimento de 0 a 180 graus")
-                        },
-                        required=["direcao"]
-                    )
-                )
-            ])
-        ]
+        data = r.json()
+        candidates = data.get("candidates", [])
+        if not candidates:
+            falar("Não consegui formular uma resposta.")
+            return
 
-        response = gemini_client.models.generate_content(
-            model="gemini-2.5-flash",
-            contents=pergunta,
-            config=types.GenerateContentConfig(
-                system_instruction=system_instruction,
-                tools=tools,
-                temperature=0.7,
-            )
-        )
+        parts = candidates[0].get("content", {}).get("parts", [])
+        
+        # Verifica se houve chamada de ferramenta
+        tool_call = None
+        texto_resposta = ""
+        for p in parts:
+            if "functionCall" in p:
+                tool_call = p["functionCall"]
+            elif "text" in p:
+                texto_resposta = p["text"]
 
-        # Checa se a IA pediu para executar uma função (Tool Call)
-        has_tool_call = False
-        if response.function_calls:
-            for call in response.function_calls:
-                has_tool_call = True
-                fn_name = call.name
-                fn_args = call.args or {}
-                print(f"[TOOL CALL] {fn_name}({fn_args})")
-                
-                tool_result = ""
-                if fn_name == "tool_mudar_cor_led":
-                    tool_result = tool_mudar_cor_led(fn_args.get("cor", "azul"))
-                elif fn_name == "tool_obter_hora":
-                    tool_result = tool_obter_hora()
-                elif fn_name == "tool_mover_robo":
-                    tool_result = tool_mover_robo(fn_args.get("direcao", "frente"), int(fn_args.get("angulo", 45)))
+        if tool_call:
+            fn_name = tool_call.get("name")
+            fn_args = tool_call.get("args", {})
+            print(f"[TOOL CALL] {fn_name}({fn_args})")
 
-                # Envia o resultado da ferramenta de volta para o Gemini gerar a resposta falada
-                follow_up = gemini_client.models.generate_content(
-                    model="gemini-2.5-flash",
-                    contents=[
-                        pergunta,
-                        types.Part.from_function_response(name=fn_name, response={"result": tool_result})
-                    ],
-                    config=types.GenerateContentConfig(system_instruction=system_instruction)
-                )
-                if follow_up.text:
-                    falar(follow_up.text.strip())
-                    return
+            resultado = ""
+            if fn_name == "mudar_cor_led":
+                resultado = tool_mudar_cor_led(fn_args.get("cor", "azul"))
+            elif fn_name == "obter_hora":
+                resultado = tool_obter_hora()
 
-        if response.text:
-            falar(response.text.strip())
+            # Envia o retorno da ferramenta de volta para gerar a fala final
+            followup_payload = {
+                "system_instruction": {"parts": [{"text": system_prompt}]},
+                "contents": [
+                    {"role": "user", "parts": [{"text": pergunta}]},
+                    {"role": "model", "parts": [{"functionCall": tool_call}]},
+                    {"role": "user", "parts": [{"functionResponse": {"name": fn_name, "response": {"result": resultado}}}]}
+                ]
+            }
+            r_followup = requests.post(url, json=followup_payload, timeout=8)
+            if r_followup.status_code == 200:
+                f_data = r_followup.json()
+                f_parts = f_data.get("candidates", [{}])[0].get("content", {}).get("parts", [])
+                for fp in f_parts:
+                    if "text" in fp and fp["text"].strip():
+                        falar(fp["text"].strip())
+                        return
+
+            falar(resultado)
+        elif texto_resposta:
+            falar(texto_resposta.strip())
 
     except Exception as e:
-        print(f"[ERRO IA] {e}")
-        falar("Tive um problema ao processar sua pergunta.")
+        print(f"[ERRO PROCESSAMENTO] {e}")
+        falar("Tive um imprevisto ao processar.")
 
 def beep_wake():
-    """Toca um bipe suave de ativacao."""
     try:
-        winsound.Beep(1200, 120)
+        winsound.Beep(1200, 100)
     except:
         pass
 
 def ciclo_escuta_microfone():
-    """Loop contínuo de escuta do microfone com detecção da Wake Word."""
     recognizer = sr.Recognizer()
     recognizer.dynamic_energy_threshold = True
     recognizer.pause_threshold = 0.8
 
-    # Procura pelo microfone físico
     mic_index = None
     for idx, name in enumerate(sr.Microphone.list_microphone_names()):
         if any(term in name.lower() for term in ["microfone", "mic", "input", "realtek"]):
@@ -247,39 +231,34 @@ def ciclo_escuta_microfone():
 
     print("\n=======================================================")
     print("      ROBO CIBORGUE PRONTO E AGUARDANDO VOCE!         ")
-    print(" Diga 'Ciborgue' para acordá-lo ou digite no terminal! ")
+    print(" Diga 'Ciborgue' para acorda-lo ou digite no terminal! ")
     print("=======================================================\n")
     set_state("IDLE")
 
     with mic as source:
-        print("[MIC] Calibrando ruído ambiente...")
+        print("[MIC] Calibrando ruido ambiente...")
         recognizer.adjust_for_ambient_noise(source, duration=1.0)
-        print("[MIC] Calibração concluída! Escutando...")
+        print("[MIC] Calibracao concluida! Escutando...")
 
         while True:
             try:
                 audio = recognizer.listen(source, timeout=None, phrase_time_limit=8)
                 try:
                     texto = recognizer.recognize_google(audio, language="pt-BR").lower()
-                    print(f"[VOCÊ DISSE]: {texto}")
+                    print(f"[VOCE DISSE]: {texto}")
 
-                    # Checa se a palavra de ativação está no texto
                     wake_found = any(w in texto for w in WAKE_WORDS)
-
                     if wake_found:
                         beep_wake()
                         set_state("LISTEN")
 
-                        # Remove a palavra de ativação para extrair o comando
                         comando = texto
                         for w in WAKE_WORDS:
                             comando = comando.replace(w, "").strip()
 
                         if len(comando) > 2:
-                            # O usuário falou "Ciborgue, acenda a luz" em uma frase só
                             processar_ia(comando)
                         else:
-                            # O usuário falou apenas "Ciborgue"
                             falar("Sim? O que você manda?")
                             set_state("LISTEN")
                             audio_cmd = recognizer.listen(source, timeout=5, phrase_time_limit=8)
@@ -292,11 +271,10 @@ def ciclo_escuta_microfone():
                 except sr.RequestError as e:
                     print(f"[ERRO RECONHECIMENTO] {e}")
 
-            except Exception as e:
+            except Exception:
                 time.sleep(0.5)
 
 def loop_terminal():
-    """Permite enviar comandos ou testar digitando diretamente no terminal."""
     while True:
         try:
             texto = input("\n[DIGITAR COMANDO]: ").strip()
@@ -304,21 +282,15 @@ def loop_terminal():
                 continue
             if texto.lower() in ["sair", "exit"]:
                 os._exit(0)
-            if texto.lower().startswith("cor:"):
-                tool_mudar_cor_led(texto.split(":", 1)[1])
-            else:
-                processar_ia(texto)
+            processar_ia(texto)
         except (KeyboardInterrupt, EOFError):
             break
 
 if __name__ == "__main__":
     set_state("IDLE")
-
-    # Inicia a thread do terminal
     t_term = threading.Thread(target=loop_terminal, daemon=True)
     t_term.start()
 
-    # Inicia a escuta do microfone na thread principal
     try:
         ciclo_escuta_microfone()
     except KeyboardInterrupt:

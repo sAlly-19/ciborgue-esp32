@@ -1,6 +1,9 @@
-google-genai>=2.23.0
 pyserial>=3.5
-SpeechRecognition>=3.14.0
-pyaudio>=0.2.14
+SpeechRecognition>=3.10.0
 pywin32>=306
 python-dotenv>=1.0.0
+PySide6>=6.6.0
+requests>=2.31.0
+sounddevice>=0.4.6
+edge-tts>=6.1.9
+miniaudio>=1.70

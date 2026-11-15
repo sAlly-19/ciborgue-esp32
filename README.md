@@ -1,139 +1,56 @@
-# 🤖 Ciborgue - Robôzinho de Mesa com ESP32-S3 & Gemini AI
+# 🤖 Ciborgue ESP32-S3 — Cérebro Autônomo Gemini + Simulador 296x240 + API Wi-Fi Android
 
-Robô de mesa inteligente, conversacional e com interação por voz em tempo real (estilo *Gemini Live*), ativado por comando de voz (**Wake Word: "Ciborgue"**) e com controle de hardware em baixíssima latência via **ESP32-S3**.
-
-> Repositório oficial: [https://github.com/sAlly-19/ciborgue-esp32](https://github.com/sAlly-19/ciborgue-esp32)
+Robô de mesa inteligente baseado no **ESP32-S3 (`N16R8` - 16MB Flash Quad / 8MB PSRAM Octal)** com cérebro **Google Gemini** rodando nativamente em C++ na placa, 6 ferramentas de hardware integradas, **Servidor HTTP REST + Auto-Discovery UDP para App Android** e bancada virtual em Python/PySide6 para a tela **Estardyn 2.01" TFT (`296x240` Paisagem - JD9853)**.
 
 ---
 
-## ⚡ Visão Geral da Arquitetura
-
-O projeto combina a inteligência multimodal do **Google Gemini (2.5 Flash)** com o poder de processamento do **ESP32-S3**.
+## 🚀 Arquitetura do Projeto
 
 ```
-[ Usuário ]
-    │
-    ▼ (Voz: "Ciborgue...")
-[ Microfone ] ──> [ Detecção de Wake Word ]
-                          │
-                          ▼
-             [ ESP32-S3: LED Verde Instantâneo ] (COM4 / Serial)
-                          │
-                          ▼
-            [ Cérebro Gemini 2.5 Flash + Tools ]
-                          │
-            ┌─────────────┴─────────────┐
-            ▼                           ▼
-  [ Síntese de Voz ]           [ Execução de Tarefas ]
-  (ESP32: LED Ciano)           (ESP32: Troca cor LED, Servos, GPIOs)
-```
-
----
-
-## 🛠️ Hardware Utilizado
-
-* **Microcontrolador:** ESP32-S3-WROOM-1 (`N16R8`)
-  * **Processador:** Dual-Core Xtensa LX7 até 240 MHz
-  * **Memória Flash:** 16 MB
-  * **Memória PSRAM:** 8 MB (Octal SPI)
-  * **Portas USB:** 2x USB-C (1x Nativa OTG / 1x UART CH343)
-* **Feedback Visual Onboard:** LED RGB endereçável WS2812 no pino **`GPIO 48`**
-* **Expansões previstas (em andamento):**
-  * Microfone Digital I2S (`INMP441`)
-  * Amplificador de Áudio I2S (`MAX98357A`) + Mini Alto-falante
-  * Servo-motores para movimentação de cabeça/braços
-
----
-
-## 💡 Máquina de Estados Visuais (LED RGB)
-
-O firmware no ESP32 gerencia estados visuais instantâneos para indicar o que o robô está fazendo:
-
-| Estado | Cor do LED | Significado |
-| :--- | :--- | :--- |
-| **`STATE:IDLE`** | 🔵 Azul (respiração suave) | Dormindo / Esperando a palavra de ativação |
-| **`STATE:LISTEN`** | 🟢 Verde vivo | Acordou! Escutando o comando do usuário |
-| **`STATE:THINK`** | 🟣 Roxo pulsante | Processando o pensamento / Chamada de IA |
-| **`STATE:SPEAK`** | 💠 Ciano oscilante | Falando a resposta em voz alta |
-| **`STATE:ALERT`** | 🟠 Laranja / Amarelo | Alerta ou aviso do sistema |
-
----
-
-## 📂 Estrutura do Projeto
-
-```
-ciborgue-esp32/
-├── .env.example          # Exemplo de configuração de variáveis de ambiente
-├── .gitignore            # Filtro para ignorar builds (.pio/) e segredos (.env)
-├── ciborgue.py           # Orquestrador Python (Wake Word, Áudio, Gemini & Serial)
-├── platformio.ini        # Configuração de build e upload da placa ESP32-S3
-├── requirements.txt      # Dependências Python necessárias
+ESP-32/
+├── platformio.ini              # Configuração PlatformIO (ESP32-S3 N16R8 + 8MB PSRAM qio_opi)
+├── include/
+│   ├── config.h                # Pinout seguro ESP32-S3, flags físicas e modelo Gemini
+│   ├── robot_types.h           # Estados (IDLE, LISTEN, THINK, SPEAK, ALERT) e 8 Emoções
+│   ├── nvs_config.h            # Persistência Flash NVS (Wi-Fi, Gemini API Key, Cidade) + NTP
+│   ├── led_controller.h        # Driver não-bloqueante 50 FPS WS2812 (GPIO 48)
+│   ├── display_hal.h           # Driver para tela Estardyn 2.01" JD9853 (296x240)
+│   ├── audio_hal.h             # Driver I2S para INMP441 (Mic) e MAX98357A (Amp)
+│   ├── tools_controller.h      # 6 Ferramentas C++ acionadas pelo Gemini via Function Calling
+│   ├── gemini_brain.h          # Cliente HTTPS Gemini C++ com sessão TLS reutilizável e fallback 429
+│   └── wifi_api_server.h       # Servidor HTTP REST (Porta 80) + mDNS (ciborgue.local) + UDP 4210
 ├── src/
-│   └── main.cpp          # Firmware C++ (Arduino Core) com controle do WS2812 e Serial
-└── include/
+│   └── main.cpp                # Loop principal + Task FreeRTOS Core 0 (50 FPS) + Protocolo Serial/Wi-Fi
+├── app/                        # Pacote Python modular da Bancada Virtual PC (PySide6)
+│   ├── config.py               # Vozes, prosódia emocional e constantes da tela 296x240
+│   ├── signals.py              # Barramento Qt Signals thread-safe
+│   ├── physics.py              # Física de mola Harmônica (Squash & Stretch) e partículas
+│   ├── sfx.py                  # Efeitos sonoros robóticos em memória
+│   ├── face_canvas.py          # Renderizador 60 FPS estilo Eilik/BMO (olhos 3D + boca LipSync)
+│   ├── audio_tts.py            # Pipeline TTS de baixa latência (~0.8s) com LipSync PCM em tempo real
+│   ├── mic_listener.py         # Captura de voz sounddevice 16kHz + Wake Word "Ciborgue"
+│   ├── serial_bridge.py        # Ponte USB Serial auto-reconectável com o ESP32-S3
+│   └── main_window.py          # Janela principal da bancada virtual e telemetria
+├── ciborgue.py                 # Ponto de entrada da aplicação PC
+└── PROMPT_ANDROID_APP.md       # Prompt completo para gerar o App Android conectado ao ESP32-S3
 ```
 
 ---
 
-## 🚀 Como Executar
+## 📡 API Wi-Fi HTTP para App Android (`include/wifi_api_server.h`)
 
-### 1. Clonar o Repositório e Instalar Dependências
+Assim que o ESP32-S3 conecta ao Wi-Fi, ele inicia um servidor HTTP na **porta 80** (`http://<IP_DO_ESP32>` ou `http://ciborgue.local`) e escuta pacotes de descoberta na **porta UDP 4210** (`"CIBORGUE_DISCOVER"`):
 
-```bash
-git clone https://github.com/sAlly-19/ciborgue-esp32.git
-cd ciborgue-esp32
+| Método | Rota | Corpo JSON (Exemplo) | Descrição |
+|---|---|---|---|
+| `GET` | `/api/status` | — | Retorna telemetria completa (`state`, `emotion`, `temp_c`, `wifi_rssi`, `ip`, `heap_kb`, `psram_kb`, `led_r/g/b`, `timer_rem_s`, `last_reply`) |
+| `POST` | `/api/chat` | `{"message": "Oi Ciborgue!"}` | Envia mensagem ao cérebro Gemini C++ no ESP32-S3 e retorna `{"ok":true, "reply":"...", "emotion":"HAPPY"}` |
+| `POST` | `/api/emotion` | `{"emotion": "HAPPY"}` | Muda expressão (`NEUTRAL`, `HAPPY`, `SAD`, `ANGRY`, `SURPRISED`, `WINK`, `LOVE`, `SLEEPY`) |
+| `POST` | `/api/state` | `{"state": "LISTEN"}` | Muda estado (`IDLE`, `LISTEN`, `THINK`, `SPEAK`, `SLEEP`, `ALERT`) |
+| `POST` | `/api/led` | `{"color": "roxo", "effect": "pulsar"}` ou `{"r":0,"g":255,"b":120,"mode":"SOLID"}` | Controla o LED RGB WS2812 no GPIO 48 |
+| `POST` | `/api/timer` | `{"seconds": 60, "label": "Café"}` | Agenda timer/alarme no ESP32-S3 |
+| `POST` | `/api/config` | `{"wifi_ssid":"...","wifi_password":"...","gemini_key":"...","city":"Sao Paulo"}` | Salva configurações na memória Flash NVS |
+| `POST` | `/api/command` | `{"cmd": "CMD:EMOTION=WINK"}` | Executa qualquer comando do protocolo Serial |
+| `POST` | `/api/clear_history` | `{}` | Limpa o histórico de conversa na memória do ESP32-S3 |
 
-# Instalar as bibliotecas Python
-pip install -r requirements.txt
-```
-
-### 2. Configurar a Chave de API
-
-Copie o arquivo de exemplo e insira sua chave gratuita do [Google AI Studio](https://aistudio.google.com/):
-
-```bash
-cp .env.example .env
-```
-
-Edite o arquivo `.env`:
-```ini
-GEMINI_API_KEY=sua_chave_aqui
-SERIAL_PORT=COM4
-BAUD_RATE=115200
-WAKE_WORD=ciborgue
-```
-
-### 3. Gravar o Firmware no ESP32-S3
-
-Com a placa conectada na porta USB:
-
-```bash
-# Compilar e fazer upload do firmware
-pio run --target upload
-```
-
-### 4. Iniciar o Ciborgue
-
-```bash
-python ciborgue.py
-```
-
-Assim que a mensagem de prontidão aparecer, basta falar no microfone:
-* *"Ciborgue, acenda a luz vermelha"*
-* *"Ciborgue, que horas são?"*
-* *"Ciborgue, conte uma curiosidade sobre robôs"*
-
----
-
-## 🔧 Ferramentas Integradas (Function Calling)
-
-O Ciborgue possui suporte a **Tool Calling nativo** do Gemini. Atualmente ele pode:
-1. `tool_mudar_cor_led(cor)`: Altera em tempo real a cor do LED RGB do corpo.
-2. `tool_obter_hora()`: Informa as horas com precisão.
-3. `tool_mover_robo(direcao, angulo)`: Prepara o posicionamento angular dos servos.
-
----
-
-## 📄 Licença
-
-Distribuído sob a licença MIT. Sinta-se à vontade para modificar e expandir!
+Para criar o aplicativo Android que controla o Ciborgue, consulte o arquivo [`PROMPT_ANDROID_APP.md`](PROMPT_ANDROID_APP.md).

@@ -123,6 +123,7 @@ private:
             reply.replace("\n", " ");
             reply.trim();
 
+            setRobotState(STATE_IDLE);
             display.setSubtitle(reply);
             Serial.printf("EVT:SAY=%s\n", reply.c_str());
             sendTelemetryPacket();

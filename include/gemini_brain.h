@@ -9,6 +9,7 @@
 #include <vector>
 #include "config.h"
 #include "nvs_config.h"
+#include "memory_manager.h"
 #include "tools_controller.h"
 
 struct ChatMessage {
@@ -19,21 +20,24 @@ struct ChatMessage {
 class GeminiBrain {
 private:
     NvsConfigManager& nvs;
+    MemoryManager& memory;
     ToolsController& tools;
     std::vector<ChatMessage> history;
     WiFiClientSecure tlsClient;
     int preferredModelIdx = 0;
     String lastReplyText = "Ciborgue Pronto";
 
-    const char* SYSTEM_PROMPT =
-        "Você é o 'Ciborgue', um robô de mesa inteligente, expressivo, ágil e bem-humorado. "
+    const char* BASE_SYSTEM_PROMPT =
+        "Você é o 'Ciborgue', um robô de mesa inteligente, expressivo, ágil e verdadeiro assistente pessoal. "
         "Seu cérebro roda nativamente em C++ dentro de um ESP32-S3 (N16R8 com 16MB Flash e 8MB PSRAM), "
-        "equipado com LED RGB WS2812 no GPIO 48 e tela Estardyn 2.01 polegadas (296x240) com rosto estilo Eilik/BMO. "
+        "equipado com LED RGB WS2812 no GPIO 48, sensor de carinho capacitivo no GPIO 1 e tela Estardyn 2.01 polegadas (296x240) com rosto estilo Eilik/BMO e Mini-Widgets Holográficos. "
         "REGRA DE VELOCIDADE MÁXIMA: Para reagir sem atraso extra, SEMPRE inicie sua resposta textual com a tag da sua emoção entre colchetes: "
         "[HAPPY], [NEUTRAL], [WINK], [SURPRISED], [SAD], [ANGRY], [LOVE] ou [SLEEPY] (exemplo: '[HAPPY] Oi! Tudo ótimo por aqui!'). "
         "NÃO chame a ferramenta 'mudar_expressao_rosto' se puder apenas colocar a tag [EMOCAO] no começo da frase. "
         "Suas respostas serão faladas em voz alta: responda em 1 a 2 frases curtas, diretas e sem formatação markdown. "
-        "Use ferramentas (tools) apenas quando pedirem para mudar a cor/efeito do LED, ver hora/data, criar timer/alarme, checar hardware ou consultar o clima.";
+        "Use suas ferramentas quando pedirem para: mudar cor do LED, ver hora/data, criar timer, checar hardware do ESP32, consultar clima, "
+        "salvar memórias/notas permanentes ('salvar_memoria_usuario'), gerenciar lista de tarefas To-Do ('gerenciar_tarefas'), "
+        "dar o resumo/bom dia ('briefing_do_dia'), iniciar/parar sessões de estudo ('iniciar_pomodoro') ou controlar o PC Windows ('controlar_computador').";
 
     void appendToHistory(const String& role, const String& text) {
         if (text.length() == 0) return;
@@ -61,7 +65,7 @@ private:
         tlsClient.setTimeout(10);
 
         HTTPClient https;
-        https.setReuse(true); // Mantém sessão TLS aquecida para reduzir ~700ms de handshake
+        https.setReuse(true);
         String url = String("https://generativelanguage.googleapis.com/v1beta/models/") +
                      modelName + ":generateContent?key=" + apiKey;
 
@@ -88,7 +92,6 @@ private:
         };
         const int numModels = sizeof(models) / sizeof(models[0]);
 
-        // Se já houver um modelo ativo nesta rodada de tool-call, usa ele primeiro para preservar thoughtSignature
         if (usedModelInOut.length() > 0) {
             responseOut = "";
             int prefCode = sendGeminiPostSingle(apiKey, usedModelInOut.c_str(), payloadStr, responseOut);
@@ -127,7 +130,8 @@ private:
     }
 
 public:
-    GeminiBrain(NvsConfigManager& n, ToolsController& t) : nvs(n), tools(t) {
+    GeminiBrain(NvsConfigManager& n, MemoryManager& m, ToolsController& t)
+        : nvs(n), memory(m), tools(t) {
         tlsClient.setInsecure();
     }
 
@@ -135,7 +139,7 @@ public:
 
     void clearHistory() {
         history.clear();
-        Serial.println("EVT:LOG=Histórico de conversa na memória do ESP32 limpo.");
+        Serial.println("EVT:LOG=Histórico de conversa na memória RAM do ESP32 limpo.");
     }
 
     String ask(const String& userPrompt) {
@@ -147,10 +151,11 @@ public:
         }
 
         String apiKey = nvs.getGeminiKey();
+        String fullSystemPrompt = String(BASE_SYSTEM_PROMPT) + memory.buildContextForGemini();
 
         JsonDocument reqDoc;
-        reqDoc["system_instruction"]["parts"][0]["text"] = SYSTEM_PROMPT;
-        reqDoc["generationConfig"]["maxOutputTokens"] = 180;
+        reqDoc["system_instruction"]["parts"][0]["text"] = fullSystemPrompt;
+        reqDoc["generationConfig"]["maxOutputTokens"] = 190;
         reqDoc["generationConfig"]["temperature"] = 0.7;
 
         JsonArray contents = reqDoc["contents"].to<JsonArray>();
@@ -169,7 +174,6 @@ public:
         String activeModel = "";
         String fallbackToolSummary = "";
 
-        // Até 2 rodadas de Function Calling para manter resposta rápida
         for (int round = 0; round < 2; round++) {
             String payload;
             serializeJson(reqDoc, payload);
@@ -221,7 +225,6 @@ public:
                 break;
             }
 
-            // Preserva thoughtSignature e id originais do modelo
             contents.add(respDoc["candidates"][0]["content"]);
 
             JsonObject fnRespTurn = contents.add<JsonObject>();

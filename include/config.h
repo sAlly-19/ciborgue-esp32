@@ -8,6 +8,7 @@
 // ============================================================================
 #define ENABLE_PHYSICAL_DISPLAY 0   // 1 = Ativa Tela Estardyn 2.01" TFT 240x296 (JD9853 SPI)
 #define ENABLE_PHYSICAL_AUDIO   0   // 1 = Ativa Microfone INMP441 + Amplificador MAX98357A (I2S)
+#define ENABLE_TOUCH_SENSOR     1   // 1 = Ativa Sensor Touch Capacitivo Nativo no GPIO 1 (Carinho na Cabeça)
 
 // ============================================================================
 // 2. PINOUT SEGURO PARA ESP32-S3-WROOM-1 (N16R8 - Evita GPIOs 26-37 da PSRAM/Flash)
@@ -15,6 +16,9 @@
 
 // LED RGB Onboard (WS2812 Endereçável)
 #define PIN_RGB_LED         48
+
+// Sensor de Carinho na Cabeça (Touch Capacitivo Nativo Touch1 do ESP32-S3)
+#define PIN_TOUCH_HEAD       1      // GPIO 1 (Basta ligar a um pad/fita metálica no topo da cabeça)
 
 // Tela Estardyn 2.01" TFT LCD 240x296 (Controlador JD9853 - SPI 8 Pinos)
 // Serigrafia dos 8 pinos: GND | VCC (3.3V) | SCL | SDA | RES | DC | CS | BLK

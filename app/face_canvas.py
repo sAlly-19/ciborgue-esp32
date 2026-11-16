@@ -11,25 +11,32 @@ from PySide6.QtWidgets import QWidget
 from app.config import SCREEN_LOGICAL_W, SCREEN_LOGICAL_H, SCREEN_PREVIEW_SCALE
 from app.physics import SpringValue
 from app.sfx import play_sfx_async
+from app.widgets_overlay import WidgetsOverlayRenderer
 
 
 class FaceCanvas296x240(QWidget):
     """
     Simulador na proporção exata da tela Estardyn 2.01" TFT SPI (296x240 Paisagem).
-    Renderiza Olhos 3D estilo Cozmo/Eilik, Boca BMO com LipSync estritamente acoplado
-    à onda sonora real (PCM) e Sistema de Partículas a 60 FPS.
+    Renderiza:
+    - Olhos 3D estilo Cozmo/Eilik + Boca BMO com LipSync estritamente acoplado ao áudio PCM
+    - Layout Dividido Híbrido (Estilo Eilik/Divoom): quando um Mini-Widget Holográfico ativa,
+      os olhos e a boca encolhem suavemente para o lado esquerdo e o Card aparece à direita.
+    - Interação de Carinho na Cabeça (Mouse ou GPIO 1 Touch Capacitivo).
     """
     LOGICAL_W = SCREEN_LOGICAL_W
     LOGICAL_H = SCREEN_LOGICAL_H
     SCALE = SCREEN_PREVIEW_SCALE
 
-    def __init__(self, parent=None):
+    def __init__(self, on_pet_callback=None, parent=None):
         super().__init__(parent)
         self.setFixedSize(self.LOGICAL_W * self.SCALE, self.LOGICAL_H * self.SCALE)
+        self.setCursor(Qt.PointingHandCursor)
+        self.on_pet_callback = on_pet_callback
+        self.last_mouse_pet_ts = 0.0
 
         self.state = "IDLE"
         self.emotion = "NEUTRAL"
-        self.subtitle = "Ciborgue Pronto — Diga 'Ciborgue' ou clique em '🎤 Ouvir Agora'"
+        self.subtitle = "Ciborgue Pronto — Diga 'Ciborgue' ou faça carinho no topo da tela!"
         self.telemetry = {
             "temp_c": 0.0,
             "wifi_ok": False,
@@ -44,6 +51,13 @@ class FaceCanvas296x240(QWidget):
         self.led_mode = "STATE"
         self.continuous_until = 0.0
 
+        # Estado dos Mini-Widgets Holográficos e Pomodoro
+        self.active_widget = {}
+        self.widget_until_ts = 0.0
+        self.tasks_cache = []
+        self.pomodoro_state = {"active": False, "phase": "FOCUS", "rem_s": 0, "total_s": 1500, "goal": ""}
+        self.sp_split_ratio = SpringValue(0.0, stiffness=0.16, damping=0.76)
+
         # Controle de Piscada com Squash & Stretch
         self.anim_tick = 0.0
         self.blink_phase = 0.0
@@ -51,7 +65,7 @@ class FaceCanvas296x240(QWidget):
         self.double_blink_pending = False
         self.next_blink_time = time.time() + 2.8
 
-        # Molas Físicas (Olhar 3D, Inclinação da Cabeça, Escala Elástica dos Olhos e Boca)
+        # Molas Físicas
         self.sp_gaze_x = SpringValue(0.0, stiffness=0.16, damping=0.74)
         self.sp_gaze_y = SpringValue(0.0, stiffness=0.16, damping=0.74)
         self.sp_tilt = SpringValue(0.0, stiffness=0.14, damping=0.76)
@@ -59,11 +73,11 @@ class FaceCanvas296x240(QWidget):
         self.sp_mouth_w = SpringValue(36.0, stiffness=0.35, damping=0.66)
         self.sp_mouth_h = SpringValue(5.0, stiffness=0.38, damping=0.64)
 
-        # Comportamento Autônomo em IDLE (Idle Life)
+        # Comportamento Autônomo em IDLE
         self.next_idle_action_time = time.time() + 2.2
         self.idle_curious_squint = 0.0
 
-        # LipSync estritamente acoplado ao áudio real (0.0 enquanto não há som tocando)
+        # LipSync estritamente acoplado ao áudio real
         self.audio_amp = 0.0
         self.audio_zcr = 0.3
         self.last_audio_frame_ts = 0.0
@@ -75,6 +89,30 @@ class FaceCanvas296x240(QWidget):
         self.timer.timeout.connect(self.on_frame)
         self.timer.start(16)  # ~60 FPS
 
+    def mousePressEvent(self, event):
+        logical_y = event.position().y() / self.SCALE
+        logical_x = event.position().x() / self.SCALE
+        # Clicar no card à direita fecha o widget antecipadamente; clicar na cabeça faz carinho
+        if self.sp_split_ratio.val > 0.4 and logical_x > 138:
+            self.widget_until_ts = 0.0
+            return
+        if logical_y < 115 and (time.time() - self.last_mouse_pet_ts) > 2.5:
+            self.last_mouse_pet_ts = time.time()
+            if self.on_pet_callback:
+                self.on_pet_callback()
+            else:
+                self.trigger_emotion_impulse("LOVE")
+
+    def show_holographic_widget(self, widget_data: dict, duration_sec: float = 7.5):
+        self.active_widget = widget_data
+        self.widget_until_ts = time.time() + duration_sec
+        self.sp_eye_squash.set(1.0, impulse=0.20)
+
+    def update_pomodoro_overlay(self, pomo_data: dict):
+        self.pomodoro_state = pomo_data
+        if pomo_data.get("show_card", False):
+            self.show_holographic_widget({"type": "POMODORO"}, duration_sec=7.5)
+
     def trigger_emotion_impulse(self, emotion: str):
         self.emotion = emotion
         self.sp_eye_squash.set(1.0, impulse=0.32)
@@ -84,7 +122,7 @@ class FaceCanvas296x240(QWidget):
             play_sfx_async("happy")
         elif emotion == "LOVE":
             self.sp_tilt.set(5.5, impulse=2.0)
-            self._spawn_particles("heart", 7)
+            self._spawn_particles("heart", 8)
             play_sfx_async("love")
         elif emotion == "WINK":
             self.sp_tilt.set(-7.0, impulse=-2.5)
@@ -130,6 +168,13 @@ class FaceCanvas296x240(QWidget):
     def on_frame(self):
         now = time.time()
         self.anim_tick += 0.075
+
+        # 0. Controle do Layout Dividido Híbrido (Mini-Widgets Holográficos)
+        if now < self.widget_until_ts and self.active_widget:
+            self.sp_split_ratio.set(1.0)
+        else:
+            self.sp_split_ratio.set(0.0)
+        self.sp_split_ratio.step()
 
         # 1. Piscada com Squash & Stretch
         if not self.is_blinking and self.blink_phase == 0.0 and now >= self.next_blink_time:
@@ -192,7 +237,7 @@ class FaceCanvas296x240(QWidget):
         elif self.emotion == "HAPPY" and random.random() < 0.05 and len(self.particles) < 6:
             self._spawn_particles("star", 1)
 
-        # 3. LipSync Estritamente Sincronizado com o Som Real (Zero movimento sem áudio!)
+        # 3. LipSync Estritamente Sincronizado com o Som Real
         has_live_audio = (self.state == "SPEAK") and ((now - self.last_audio_frame_ts) < 0.12)
         if has_live_audio and self.audio_amp > 0.04:
             amp = self.audio_amp
@@ -204,7 +249,6 @@ class FaceCanvas296x240(QWidget):
             if amp > 0.55:
                 self.sp_eye_squash.set(1.03)
         else:
-            # Quando está em silêncio ou aguardando o TTS iniciar, boca permanece fechada
             self.sp_mouth_w.set(32.0)
             self.sp_mouth_h.set(4.5)
 
@@ -264,24 +308,36 @@ class FaceCanvas296x240(QWidget):
         wifi_ok = self.telemetry.get("wifi_ok", False)
         painter.setPen(QColor(0, 230, 120) if wifi_ok else QColor(255, 95, 75))
         ssid = self.telemetry.get("wifi_ssid") or "Offline"
-        painter.drawText(14, 17, f"● Wi-Fi: {ssid}"[:22] if wifi_ok else "○ Wi-Fi: Offline")
+        painter.drawText(14, 16, f"● Wi-Fi: {ssid}"[:22] if wifi_ok else "○ Wi-Fi: Offline")
 
         temp_c = self.telemetry.get("temp_c", 0.0)
         rem_window = max(0.0, self.continuous_until - time.time())
         if rem_window > 0 and self.state == "IDLE":
             painter.setPen(QColor(74, 222, 128))
-            painter.drawText(122, 17, f"🎤 Escuta Ativa ({rem_window:.0f}s)")
+            painter.drawText(122, 16, f"🎤 Escuta Ativa ({rem_window:.0f}s)")
         else:
             painter.setPen(QColor(155, 175, 200))
-            painter.drawText(138, 17, f"{temp_c:.1f}°C | {self.state}")
+            painter.drawText(138, 16, f"{temp_c:.1f}°C | {self.state}")
 
         lr, lg, lb = self.led_rgb
         painter.setPen(QPen(QColor(110, 125, 145), 1))
         painter.setBrush(QBrush(QColor(lr, lg, lb)))
-        painter.drawEllipse(QPointF(274, 13), 6, 6)
+        painter.drawEllipse(QPointF(274, 12), 5.5, 5.5)
 
-        # 3. Transformação 3D do Rosto
+        # 2b. Barra Neon Discreta de Pomodoro (quando ativo)
+        WidgetsOverlayRenderer.draw_pomodoro_top_bar(painter, self.pomodoro_state, self.anim_tick)
+
+        # 3. Transformação 3D do Rosto (com suporte a Layout Dividido Híbrido)
         painter.save()
+        split = max(0.0, min(1.0, self.sp_split_ratio.val))
+        face_scale = 1.0 - (0.37 * split)
+        target_center_x = 148.0 * (1.0 - split) + 72.0 * split
+        target_center_y = 112.0 * (1.0 - split) + 114.0 * split
+
+        painter.translate(target_center_x, target_center_y)
+        painter.scale(face_scale, face_scale)
+        painter.translate(-148.0, -112.0)
+
         breath_y = math.sin(self.anim_tick * 0.9) * 2.2
         shake_x = random.uniform(-1.8, 1.8) if self.emotion == "ANGRY" else 0.0
         gx = self.sp_gaze_x.val
@@ -336,6 +392,16 @@ class FaceCanvas296x240(QWidget):
         self._draw_expressive_mouth(painter, mouth_cx, mouth_cy, face_color)
 
         painter.restore()
+
+        # 4b. Mini-Widget Holográfico na Direita (quando ativo)
+        WidgetsOverlayRenderer.draw_holographic_card(
+            painter,
+            self.active_widget,
+            self.tasks_cache,
+            self.pomodoro_state,
+            split,
+            self.anim_tick
+        )
 
         # 5. Partículas Flutuantes
         self._draw_particles(painter)

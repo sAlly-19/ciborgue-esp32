@@ -6,6 +6,9 @@
 #include "led_controller.h"
 #include "display_hal.h"
 #include "audio_hal.h"
+#include "memory_manager.h"
+#include "pomodoro_manager.h"
+#include "touch_sensor.h"
 #include "tools_controller.h"
 #include "gemini_brain.h"
 #include "wifi_api_server.h"
@@ -15,14 +18,17 @@ NvsConfigManager nvsConfig;
 LedController    ledController;
 DisplayHAL       displayHal;
 AudioHAL         audioHal;
+MemoryManager    memoryManager;
 
 volatile RobotState currentState   = STATE_BOOT;
 FaceEmotion         currentEmotion = EMO_NEUTRAL;
 RobotTimer          activeTimer;
 
-ToolsController toolsController(ledController, displayHal, nvsConfig, currentEmotion, activeTimer);
-GeminiBrain     geminiBrain(nvsConfig, toolsController);
-WifiApiServer   wifiApiServer(nvsConfig, ledController, displayHal, toolsController, geminiBrain, currentState, currentEmotion, activeTimer);
+PomodoroManager  pomodoroManager(ledController, displayHal, currentState, currentEmotion);
+TouchHeadSensor  touchSensor(ledController, displayHal, currentState, currentEmotion);
+ToolsController  toolsController(ledController, displayHal, nvsConfig, memoryManager, pomodoroManager, currentEmotion, activeTimer);
+GeminiBrain      geminiBrain(nvsConfig, memoryManager, toolsController);
+WifiApiServer    wifiApiServer(nvsConfig, ledController, displayHal, memoryManager, pomodoroManager, touchSensor, toolsController, geminiBrain, currentState, currentEmotion, activeTimer);
 
 // Buffer Serial assíncrono não-bloqueante
 static char serialBuffer[1024];
@@ -69,6 +75,10 @@ void sendTelemetryPacket() {
         doc["timer_rem_s"] = 0;
     }
 
+    doc["pomo_active"] = pomodoroManager.isActive();
+    doc["pomo_rem_s"]  = pomodoroManager.getRemainingSec();
+    doc["pomo_goal"]   = pomodoroManager.getGoal();
+
     String out;
     serializeJson(doc, out);
     Serial.printf("EVT:TELEMETRY=%s\n", out.c_str());
@@ -87,11 +97,13 @@ void processSerialCommand(String cmd) {
     cmd.trim();
     if (cmd.length() == 0) return;
 
-    // 1. Ping / Healthcheck
+    // 1. Ping / Healthcheck + Sincronia Completa (Telemetria, Tarefas e Memórias NVS)
     if (cmd == "PING") {
         Serial.println("PONG");
         Serial.println("EVT:PONG");
         sendTelemetryPacket();
+        memoryManager.emitAllSyncPackets();
+        pomodoroManager.emitStatusPacket(false);
         return;
     }
 
@@ -139,7 +151,6 @@ void processSerialCommand(String cmd) {
         resposta.replace("\n", " ");
         resposta.trim();
 
-        // Permanece em THINK até o PC avisar CMD:STATE=SPEAK no início exato do áudio
         displayHal.setSubtitle(resposta);
         Serial.printf("EVT:SAY=%s\n", resposta.c_str());
         sendTelemetryPacket();
@@ -153,7 +164,68 @@ void processSerialCommand(String cmd) {
         return;
     }
 
-    // 5. Controle de Estado (Compatível com protocolo antigo e novo)
+    // 5. Carinho na Cabeça (Touch Físico ou Virtual pelo Mouse/Botão)
+    if (cmd == "CMD:PET") {
+        touchSensor.triggerPetReaction(true);
+        return;
+    }
+
+    // 6. Comandos Diretos de Tarefas e Memórias NVS pelo Painel Visual PC
+    if (cmd.startsWith("CMD:TASK_ADD=")) {
+        memoryManager.addTask(cmd.substring(13));
+        return;
+    }
+    if (cmd.startsWith("CMD:TASK_DONE=")) {
+        int id = cmd.substring(14).toInt();
+        memoryManager.completeTask(id);
+        return;
+    }
+    if (cmd.startsWith("CMD:TASK_DEL=")) {
+        int id = cmd.substring(13).toInt();
+        memoryManager.removeTask(id);
+        return;
+    }
+    if (cmd == "CMD:TASK_CLEAR") {
+        memoryManager.clearTasks(false);
+        return;
+    }
+    if (cmd.startsWith("CMD:MEM_ADD=")) {
+        memoryManager.addMemory(cmd.substring(12));
+        return;
+    }
+    if (cmd.startsWith("CMD:MEM_DEL=")) {
+        int idx = cmd.substring(12).toInt();
+        memoryManager.removeMemory(idx);
+        return;
+    }
+    if (cmd == "CMD:MEM_CLEAR") {
+        memoryManager.clearMemories();
+        return;
+    }
+
+    // 7. Comandos Diretos de Pomodoro pelo Painel PC
+    if (cmd.startsWith("CMD:POMO_START=")) {
+        String payload = cmd.substring(15);
+        int s1 = payload.indexOf('|');
+        int s2 = payload.lastIndexOf('|');
+        int fMin = 25, bMin = 5;
+        String goal = "Foco Total";
+        if (s1 != -1 && s2 != -1 && s2 > s1) {
+            fMin = payload.substring(0, s1).toInt();
+            bMin = payload.substring(s1 + 1, s2).toInt();
+            goal = payload.substring(s2 + 1);
+        }
+        String msg = pomodoroManager.start(fMin, bMin, goal);
+        Serial.printf("EVT:SAY=%s\n", msg.c_str());
+        return;
+    }
+    if (cmd == "CMD:POMO_STOP") {
+        String msg = pomodoroManager.stop();
+        Serial.printf("EVT:LOG=%s\n", msg.c_str());
+        return;
+    }
+
+    // 8. Controle de Estado
     if (cmd.startsWith("STATE:") || cmd.startsWith("CMD:STATE=")) {
         int idx = cmd.indexOf(':') != -1 && !cmd.startsWith("CMD:") ? cmd.indexOf(':') + 1 : cmd.indexOf('=') + 1;
         String st = cmd.substring(idx);
@@ -163,7 +235,7 @@ void processSerialCommand(String cmd) {
         return;
     }
 
-    // 6. Controle de Emoção / Expressão do Rosto 296x240
+    // 9. Controle de Emoção / Expressão do Rosto 296x240
     if (cmd.startsWith("CMD:EMOTION=") || cmd.startsWith("EMOTION:")) {
         int idx = cmd.indexOf('=') != -1 ? cmd.indexOf('=') + 1 : cmd.indexOf(':') + 1;
         String emo = cmd.substring(idx);
@@ -171,7 +243,7 @@ void processSerialCommand(String cmd) {
         return;
     }
 
-    // 7. Controle Direto de Cor RGB ou Nome
+    // 10. Controle Direto de Cor RGB ou Nome
     if (cmd.startsWith("RGB:")) {
         String vals = cmd.substring(4);
         int c1 = vals.indexOf(',');
@@ -197,9 +269,10 @@ void processSerialCommand(String cmd) {
         return;
     }
 
-    // 8. Telemetria e Limpeza de Memória
+    // 11. Telemetria e Limpeza de Memória
     if (cmd == "CMD:GET_STATUS" || cmd == "GET:STATUS") {
         sendTelemetryPacket();
+        memoryManager.emitAllSyncPackets();
         return;
     }
 
@@ -223,6 +296,8 @@ void setup() {
     displayHal.begin();
     audioHal.begin();
     nvsConfig.begin();
+    memoryManager.begin();
+    touchSensor.begin();
 
     // Inicia task de animação em segundo plano no Core 0 (50 FPS garantidos)
     xTaskCreatePinnedToCore(animTask, "AnimTask", 4096, NULL, 1, NULL, 0);
@@ -237,6 +312,7 @@ void setup() {
     setRobotState(STATE_IDLE);
     setRobotEmotion(EMO_NEUTRAL);
     sendTelemetryPacket();
+    memoryManager.emitAllSyncPackets();
 }
 
 void loop() {
@@ -267,14 +343,17 @@ void loop() {
         sendTelemetryPacket();
     }
 
-    // Retorna de STATE_ALERT para IDLE após 6 segundos se não estiver falando
     if (currentState == STATE_ALERT && alertStartMillis > 0 && (millis() - alertStartMillis > 6000)) {
         alertStartMillis = 0;
         setRobotState(STATE_IDLE);
         setRobotEmotion(EMO_NEUTRAL);
     }
 
-    // 3. Servidor HTTP REST + UDP Auto-Discovery para App Android e Manutenção de Wi-Fi
+    // 3. Atualização do Sensor de Carinho (GPIO 1) e Modo Pomodoro
+    touchSensor.update();
+    pomodoroManager.update();
+
+    // 4. Servidor HTTP REST + UDP Auto-Discovery para App Android e Manutenção de Wi-Fi
     nvsConfig.loopMaintainWifi();
     wifiApiServer.handleClient();
     if (millis() - lastTelemetryMillis > 5000) {

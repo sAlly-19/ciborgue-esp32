@@ -11,12 +11,16 @@
 #include "led_controller.h"
 #include "display_hal.h"
 #include "nvs_config.h"
+#include "memory_manager.h"
+#include "pomodoro_manager.h"
 
 class ToolsController {
 private:
     LedController& led;
     DisplayHAL& display;
     NvsConfigManager& nvs;
+    MemoryManager& memory;
+    PomodoroManager& pomodoro;
     FaceEmotion& currentEmotion;
     RobotTimer& activeTimer;
 
@@ -51,9 +55,17 @@ private:
         return "condição variável";
     }
 
+    void emitWidgetEvent(const JsonDocument& doc) {
+        String out;
+        serializeJson(doc, out);
+        Serial.printf("EVT:WIDGET=%s\n", out.c_str());
+    }
+
 public:
-    ToolsController(LedController& l, DisplayHAL& d, NvsConfigManager& n, FaceEmotion& emo, RobotTimer& tmr)
-        : led(l), display(d), nvs(n), currentEmotion(emo), activeTimer(tmr) {}
+    ToolsController(LedController& l, DisplayHAL& d, NvsConfigManager& n, MemoryManager& mem,
+                    PomodoroManager& pomo, FaceEmotion& emo, RobotTimer& tmr)
+        : led(l), display(d), nvs(n), memory(mem), pomodoro(pomo),
+          currentEmotion(emo), activeTimer(tmr) {}
 
     String toolMudarExpressao(const String& emocaoStr) {
         currentEmotion = stringToEmotion(emocaoStr);
@@ -73,12 +85,23 @@ public:
             return String("Relógio NTP ainda não sincronizado. O robô está ligado há ") + String(upSec) + " segundos.";
         }
         const char* diasSemana[] = {"domingo", "segunda-feira", "terça-feira", "quarta-feira", "quinta-feira", "sexta-feira", "sábado"};
+        char timeBuf[16];
+        char dateBuf[20];
+        snprintf(timeBuf, sizeof(timeBuf), "%02d:%02d", timeinfo.tm_hour, timeinfo.tm_min);
+        snprintf(dateBuf, sizeof(dateBuf), "%02d/%02d/%04d", timeinfo.tm_mday, timeinfo.tm_mon + 1, timeinfo.tm_year + 1900);
+
+        // Dispara Mini-Widget Holográfico de Relógio na tela 296x240
+        JsonDocument wDoc;
+        wDoc["type"] = "CLOCK";
+        wDoc["time"] = timeBuf;
+        wDoc["date"] = dateBuf;
+        wDoc["weekday"] = diasSemana[timeinfo.tm_wday];
+        emitWidgetEvent(wDoc);
+
         char buffer[140];
         snprintf(buffer, sizeof(buffer),
-                 "Agora são %02d:%02d (%s, dia %02d/%02d/%04d).",
-                 timeinfo.tm_hour, timeinfo.tm_min,
-                 diasSemana[timeinfo.tm_wday],
-                 timeinfo.tm_mday, timeinfo.tm_mon + 1, timeinfo.tm_year + 1900);
+                 "Agora são %s (%s, dia %s).",
+                 timeBuf, diasSemana[timeinfo.tm_wday], dateBuf);
         return String(buffer);
     }
 
@@ -165,12 +188,90 @@ public:
         float sens = wDoc["current"]["apparent_temperature"] | 0.0f;
         int umid   = wDoc["current"]["relative_humidity_2m"] | 0;
         int wCode  = wDoc["current"]["weather_code"] | 0;
+        const char* descPt = weatherCodeToPt(wCode);
+
+        // Dispara Mini-Widget Holográfico de Clima na tela 296x240
+        JsonDocument card;
+        card["type"]  = "WEATHER";
+        card["city"]  = nomeCidade;
+        card["temp"]  = serialized(String(temp, 1));
+        card["feels"] = serialized(String(sens, 1));
+        card["hum"]   = umid;
+        card["code"]  = wCode;
+        card["desc"]  = descPt;
+        emitWidgetEvent(card);
 
         char res[220];
         snprintf(res, sizeof(res),
                  "Clima em %s: %.1f°C (sensação de %.1f°C), umidade de %d%% e %s.",
-                 nomeCidade.c_str(), temp, sens, umid, weatherCodeToPt(wCode));
+                 nomeCidade.c_str(), temp, sens, umid, descPt);
         return String(res);
+    }
+
+    String toolSalvarMemoria(const String& acao, const String& fato) {
+        String act = acao;
+        act.toLowerCase();
+        if (act == "limpar" || act == "apagar_tudo") {
+            return memory.clearMemories();
+        }
+        return memory.addMemory(fato);
+    }
+
+    String toolGerenciarTarefas(const String& acao, const String& titulo, int id) {
+        String act = acao;
+        act.toLowerCase();
+        String result;
+        if (act == "adicionar" || act == "criar" || act == "add") {
+            result = memory.addTask(titulo);
+        } else if (act == "concluir" || act == "completar" || act == "done") {
+            result = memory.completeTask(id, titulo);
+        } else if (act == "remover" || act == "excluir" || act == "del") {
+            result = memory.removeTask(id);
+        } else if (act == "limpar") {
+            result = memory.clearTasks(false);
+        } else {
+            result = memory.getTasksSummaryText();
+        }
+
+        // Dispara Mini-Widget Holográfico de Tarefas na tela 296x240
+        JsonDocument card;
+        card["type"] = "TASKS";
+        emitWidgetEvent(card);
+        return result;
+    }
+
+    String toolBriefingDoDia() {
+        String hora = toolObterHoraEData();
+        String clima = toolObterClima(nvs.getDefaultCity());
+        String tarefas = memory.getTasksSummaryText();
+        return hora + " " + clima + " " + tarefas;
+    }
+
+    String toolIniciarPomodoro(const String& acao, int minFoco, int minPausa, const String& meta) {
+        String act = acao;
+        act.toLowerCase();
+        if (act == "parar" || act == "cancelar" || act == "stop") {
+            return pomodoro.stop();
+        }
+        return pomodoro.start(minFoco, minPausa, meta);
+    }
+
+    String toolControlarComputador(const String& acao, const String& parametro) {
+        JsonDocument pcDoc;
+        pcDoc["action"] = acao;
+        pcDoc["param"]  = parametro;
+        String out;
+        serializeJson(pcDoc, out);
+        Serial.printf("EVT:PC=%s\n", out.c_str());
+
+        JsonDocument card;
+        card["type"]   = "PC_CONTROL";
+        card["action"] = acao;
+        card["param"]  = parametro;
+        emitWidgetEvent(card);
+
+        return String("Comando enviado ao PC Windows: ") + acao +
+               (parametro.length() > 0 ? (" (" + parametro + ")") : "");
     }
 
     String executeToolCall(const String& fnName, JsonObjectConst args) {
@@ -194,6 +295,27 @@ public:
         } else if (fnName == "obter_clima") {
             String cid = args["cidade"] | nvs.getDefaultCity();
             return toolObterClima(cid);
+        } else if (fnName == "salvar_memoria_usuario") {
+            String acao = args["acao"] | "adicionar";
+            String fato = args["fato"] | "";
+            return toolSalvarMemoria(acao, fato);
+        } else if (fnName == "gerenciar_tarefas") {
+            String acao = args["acao"] | "listar";
+            String titulo = args["titulo"] | "";
+            int id = args["id"] | 1;
+            return toolGerenciarTarefas(acao, titulo, id);
+        } else if (fnName == "briefing_do_dia") {
+            return toolBriefingDoDia();
+        } else if (fnName == "iniciar_pomodoro") {
+            String acao = args["acao"] | "iniciar";
+            int foco = args["minutos_foco"] | 25;
+            int pausa = args["minutos_pausa"] | 5;
+            String meta = args["meta"] | "Foco e Estudo";
+            return toolIniciarPomodoro(acao, foco, pausa, meta);
+        } else if (fnName == "controlar_computador") {
+            String acao = args["acao"] | "pc_status";
+            String param = args["parametro"] | "";
+            return toolControlarComputador(acao, param);
         }
         return "Ferramenta desconhecida: " + fnName;
     }
@@ -236,7 +358,7 @@ public:
         {
             JsonObject fn = decls.add<JsonObject>();
             fn["name"] = "obter_hora_e_data";
-            fn["description"] = "Obtém o horário exato, dia da semana e data atual do relógio interno NTP do ESP32.";
+            fn["description"] = "Obtém o horário exato, dia da semana e data atual do relógio NTP do ESP32 e exibe o widget de relógio.";
             JsonObject params = fn["parameters"].to<JsonObject>();
             params["type"] = "OBJECT";
             params["properties"].to<JsonObject>();
@@ -272,7 +394,7 @@ public:
         {
             JsonObject fn = decls.add<JsonObject>();
             fn["name"] = "obter_clima";
-            fn["description"] = "Consulta a temperatura e previsão do tempo atual de qualquer cidade via Wi-Fi.";
+            fn["description"] = "Consulta a temperatura e previsão do tempo atual de qualquer cidade via Wi-Fi e exibe o widget de clima.";
             JsonObject params = fn["parameters"].to<JsonObject>();
             params["type"] = "OBJECT";
             JsonObject props = params["properties"].to<JsonObject>();
@@ -280,6 +402,86 @@ public:
             props["cidade"]["description"] = "Nome da cidade (ex: Sao Paulo, Curitiba, Rio de Janeiro).";
             JsonArray req = params["required"].to<JsonArray>();
             req.add("cidade");
+        }
+
+        // 7. salvar_memoria_usuario
+        {
+            JsonObject fn = decls.add<JsonObject>();
+            fn["name"] = "salvar_memoria_usuario";
+            fn["description"] = "Grava permanentemente na Flash NVS um fato importante sobre o usuário (nome, preferências, datas de provas, notas) para lembrar no futuro.";
+            JsonObject params = fn["parameters"].to<JsonObject>();
+            params["type"] = "OBJECT";
+            JsonObject props = params["properties"].to<JsonObject>();
+            props["acao"]["type"] = "STRING";
+            props["acao"]["description"] = "Ação: 'adicionar' ou 'limpar'.";
+            props["fato"]["type"] = "STRING";
+            props["fato"]["description"] = "O fato ou nota a ser guardado (ex: 'Prova de Redes na sexta-feira').";
+            JsonArray req = params["required"].to<JsonArray>();
+            req.add("fato");
+        }
+
+        // 8. gerenciar_tarefas
+        {
+            JsonObject fn = decls.add<JsonObject>();
+            fn["name"] = "gerenciar_tarefas";
+            fn["description"] = "Adiciona, conclui, remove ou lista as tarefas (To-Do List) salvas na Flash NVS do ESP32 e abre o widget visual de tarefas.";
+            JsonObject params = fn["parameters"].to<JsonObject>();
+            params["type"] = "OBJECT";
+            JsonObject props = params["properties"].to<JsonObject>();
+            props["acao"]["type"] = "STRING";
+            props["acao"]["description"] = "Ação: 'adicionar', 'concluir', 'remover', 'listar' ou 'limpar'.";
+            props["titulo"]["type"] = "STRING";
+            props["titulo"]["description"] = "Título ou descrição da tarefa.";
+            props["id"]["type"] = "INTEGER";
+            props["id"]["description"] = "Número/ID da tarefa (para concluir ou remover).";
+            JsonArray req = params["required"].to<JsonArray>();
+            req.add("acao");
+        }
+
+        // 9. briefing_do_dia
+        {
+            JsonObject fn = decls.add<JsonObject>();
+            fn["name"] = "briefing_do_dia";
+            fn["description"] = "Gera um resumo matinal/diário completo combinando horário atual, clima da cidade e lista de tarefas pendentes.";
+            JsonObject params = fn["parameters"].to<JsonObject>();
+            params["type"] = "OBJECT";
+            params["properties"].to<JsonObject>();
+        }
+
+        // 10. iniciar_pomodoro
+        {
+            JsonObject fn = decls.add<JsonObject>();
+            fn["name"] = "iniciar_pomodoro";
+            fn["description"] = "Inicia ou encerra o Modo Companheiro de Estudo Pomodoro com barra visual na tela 296x240.";
+            JsonObject params = fn["parameters"].to<JsonObject>();
+            params["type"] = "OBJECT";
+            JsonObject props = params["properties"].to<JsonObject>();
+            props["acao"]["type"] = "STRING";
+            props["acao"]["description"] = "Ação: 'iniciar' ou 'parar'.";
+            props["minutos_foco"]["type"] = "INTEGER";
+            props["minutos_foco"]["description"] = "Minutos de foco (padrão 25).";
+            props["minutos_pausa"]["type"] = "INTEGER";
+            props["minutos_pausa"]["description"] = "Minutos de descanso (padrão 5).";
+            props["meta"]["type"] = "STRING";
+            props["meta"]["description"] = "O que o usuário vai estudar ou programar.";
+            JsonArray req = params["required"].to<JsonArray>();
+            req.add("acao");
+        }
+
+        // 11. controlar_computador
+        {
+            JsonObject fn = decls.add<JsonObject>();
+            fn["name"] = "controlar_computador";
+            fn["description"] = "Executa comandos e automações no PC Windows conectado: controlar mídia/música, ajustar volume, abrir programas/sites, bloquear tela, desligar/reiniciar/suspender o PC, fechar processos ou ler uso de CPU/RAM/Disco/Bateria do PC.";
+            JsonObject params = fn["parameters"].to<JsonObject>();
+            params["type"] = "OBJECT";
+            JsonObject props = params["properties"].to<JsonObject>();
+            props["acao"]["type"] = "STRING";
+            props["acao"]["description"] = "Ação exata: 'media_play_pause', 'media_next', 'media_prev', 'volume_up', 'volume_down', 'volume_mute', 'volume_set', 'open_app', 'open_url', 'youtube_search', 'google_search', 'lock_pc', 'sleep_pc', 'shutdown_pc', 'restart_pc', 'cancel_shutdown', 'kill_process' ou 'pc_status'.";
+            props["parametro"]["type"] = "STRING";
+            props["parametro"]["description"] = "Parâmetro da ação: nível de volume (0-100), nome do app (vscode, chrome, spotify, calc, notepad, explorer, etc.), URL/termo de busca ou nome do processo.";
+            JsonArray req = params["required"].to<JsonArray>();
+            req.add("acao");
         }
     }
 };

@@ -14,3 +14,11 @@ class BridgeSignals(QObject):
     mic_level_changed = Signal(int)
     conv_window_changed = Signal(float)
     audio_lipsync_frame = Signal(float, float)  # (amplitude 0..1, zcr 0..1)
+
+    # Novos sinais modulares (Memórias NVS, Tarefas, Pomodoro, Mini-Widgets, PC Control e Carinho)
+    memories_updated = Signal(list)
+    tasks_updated = Signal(list)
+    pomodoro_updated = Signal(dict)
+    widget_triggered = Signal(dict)
+    pc_action_requested = Signal(dict)
+    pet_triggered = Signal()

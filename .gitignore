@@ -29,3 +29,6 @@ ENV/
 .idea/
 *.sublime-project
 *.sublime-workspace
+
+# Espelho Local de Memórias NVS
+ciborgue_memory_mirror.json

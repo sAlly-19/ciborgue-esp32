@@ -14,6 +14,8 @@ from app.face_canvas import FaceCanvas296x240
 from app.serial_bridge import SerialBridgeManager
 from app.audio_tts import AudioTtsManager
 from app.mic_listener import MicrophoneListener, list_input_microphones
+from app.pc_controller import PcController
+from app.memory_panel import AssistantFeaturesPanel
 from app.sfx import play_sfx_async
 
 
@@ -22,12 +24,13 @@ class CiborgueWorkbenchWindow(QMainWindow):
 
     def __init__(self):
         super().__init__()
-        self.setWindowTitle("🤖 Ciborgue ESP32-S3 — Bancada Virtual & Simulador Estardyn 2.01\" (296x240)")
-        self.resize(1140, 750)
+        self.setWindowTitle("🤖 Ciborgue ESP32-S3 — Assistente Completo & Simulador 296x240")
+        self.resize(1180, 810)
         self._apply_theme()
 
         self.signals = BridgeSignals()
         self.serial_bridge = SerialBridgeManager(self.signals)
+        self.pc_controller = PcController(self.signals)
 
         self._build_ui()
 
@@ -46,6 +49,11 @@ class CiborgueWorkbenchWindow(QMainWindow):
 
         self._connect_signals()
 
+        # Carrega estado espelhado local enquanto o ESP32-S3 conecta
+        self.assistant_panel.update_memories_list(self.serial_bridge.mirror_state.get("memories", []))
+        self.assistant_panel.update_tasks_list(self.serial_bridge.mirror_state.get("tasks", []))
+        self.face_canvas.tasks_cache = self.serial_bridge.mirror_state.get("tasks", [])
+
         self.serial_bridge.start()
         self.tts_manager.start()
         self.mic_listener.start()
@@ -60,8 +68,8 @@ class CiborgueWorkbenchWindow(QMainWindow):
             QGroupBox {
                 border: 1px solid #263248;
                 border-radius: 8px;
-                margin-top: 12px;
-                padding-top: 14px;
+                margin-top: 10px;
+                padding-top: 12px;
                 font-weight: bold;
                 color: #38bdf8;
             }
@@ -70,18 +78,18 @@ class CiborgueWorkbenchWindow(QMainWindow):
                 left: 10px;
                 padding: 0 6px;
             }
-            QLineEdit, QTextEdit, QComboBox {
+            QLineEdit, QTextEdit, QComboBox, QListWidget, QSpinBox {
                 background-color: #171f2e;
                 border: 1px solid #2e3d56;
                 border-radius: 6px;
-                padding: 5px;
+                padding: 4px;
                 color: #f8fafc;
             }
             QPushButton {
                 background-color: #1e293b;
                 border: 1px solid #334155;
                 border-radius: 6px;
-                padding: 6px 10px;
+                padding: 5px 9px;
                 color: #f1f5f9;
                 font-weight: 600;
             }
@@ -107,23 +115,26 @@ class CiborgueWorkbenchWindow(QMainWindow):
         central = QWidget()
         self.setCentralWidget(central)
         main_layout = QHBoxLayout(central)
-        main_layout.setContentsMargins(14, 12, 14, 12)
-        main_layout.setSpacing(16)
+        main_layout.setContentsMargins(12, 10, 12, 10)
+        main_layout.setSpacing(14)
 
-        # ================= COLUNA ESQUERDA: TELA 296x240 + EXPRESSÕES =================
+        # ================= COLUNA ESQUERDA: TELA 296x240 + EXPRESSÕES + WIDGETS =================
         left_col = QVBoxLayout()
-        left_col.setSpacing(8)
+        left_col.setSpacing(6)
 
-        header_lbl = QLabel("🖥️ Preview Tela Física: Estardyn 2.01\" TFT SPI (296x240 Paisagem - JD9853)")
+        header_lbl = QLabel("🖥️ Tela Estardyn 2.01\" TFT SPI (296x240 Paisagem) — Clique no Topo p/ Fazer Carinho 🤚")
         header_lbl.setStyleSheet("color: #94a3b8; font-size: 12px; font-weight: bold;")
         left_col.addWidget(header_lbl, alignment=Qt.AlignCenter)
 
-        self.face_canvas = FaceCanvas296x240(self)
+        self.face_canvas = FaceCanvas296x240(
+            on_pet_callback=lambda: self.serial_bridge.send_cmd("CMD:PET"),
+            parent=self
+        )
         left_col.addWidget(self.face_canvas, alignment=Qt.AlignCenter)
 
-        emo_group = QGroupBox("🎭 Testar Expressões (Física Elástica + Partículas + SFX) & Cores")
+        emo_group = QGroupBox("🎭 Expressões, Cores do LED RGB & Mini-Widgets 296x240")
         emo_grid = QGridLayout(emo_group)
-        emo_grid.setSpacing(6)
+        emo_grid.setSpacing(5)
 
         emotions = [
             ("😊 Feliz", "HAPPY"), ("😐 Neutro", "NEUTRAL"),
@@ -151,16 +162,35 @@ class CiborgueWorkbenchWindow(QMainWindow):
             btn.clicked.connect(lambda _, v=cmd_val: self.serial_bridge.send_cmd(f"CMD:COLOR={v}"))
             emo_grid.addWidget(btn, 2 + (idx // 4), idx % 4)
 
+        # Linha rápida de Widgets / Briefing / PC Status
+        btn_brief = QPushButton("☀️ Briefing do Dia")
+        btn_brief.setStyleSheet("background-color: #0284c7; color: white;")
+        btn_brief.clicked.connect(lambda: self.serial_bridge.send_cmd("MIC:Me dê o briefing do dia!"))
+        emo_grid.addWidget(btn_brief, 4, 0)
+
+        btn_w_tasks = QPushButton("📋 Widget Tarefas")
+        btn_w_tasks.clicked.connect(lambda: self.face_canvas.show_holographic_widget({"type": "TASKS"}))
+        emo_grid.addWidget(btn_w_tasks, 4, 1)
+
+        btn_pc_stat = QPushButton("💻 Diagnóstico PC")
+        btn_pc_stat.clicked.connect(lambda: self.pc_controller.execute_from_esp32({"action": "pc_status"}))
+        emo_grid.addWidget(btn_pc_stat, 4, 2)
+
+        btn_pet_quick = QPushButton("🤚 Fazer Carinho")
+        btn_pet_quick.setStyleSheet("background-color: #db2777; color: white;")
+        btn_pet_quick.clicked.connect(lambda: self.serial_bridge.send_cmd("CMD:PET"))
+        emo_grid.addWidget(btn_pet_quick, 4, 3)
+
         left_col.addWidget(emo_group)
         left_col.addStretch(1)
         main_layout.addLayout(left_col)
 
-        # ================= COLUNA DIREITA: TELEMETRIA, VOZ GEMINI, MIC, NVS E CHAT =================
+        # ================= COLUNA DIREITA: TELEMETRIA, VOZ, ASSISTENTE NVS E CHAT =================
         right_col = QVBoxLayout()
-        right_col.setSpacing(8)
+        right_col.setSpacing(6)
 
         # 1. Telemetria do ESP32-S3
-        tel_group = QGroupBox("📊 Telemetria em Tempo Real do ESP32-S3 (COM4)")
+        tel_group = QGroupBox("📊 Telemetria em Tempo Real do ESP32-S3 (COM4 & API HTTP Porta 80)")
         tel_layout = QGridLayout(tel_group)
         self.lbl_serial = QLabel("🔌 Serial: Procurando ESP32-S3...")
         self.lbl_wifi = QLabel("📶 Wi-Fi ESP32: Aguardando...")
@@ -172,8 +202,8 @@ class CiborgueWorkbenchWindow(QMainWindow):
         tel_layout.addWidget(self.lbl_mem, 1, 1)
         right_col.addWidget(tel_group)
 
-        # 2. Voz Gemini TTS + Seletor de Microfone + VU Meter
-        audio_group = QGroupBox("🎙️ Voz Expressiva (Gemini 3.8 TTS) & Microfone Ao Vivo")
+        # 2. Voz Expressiva + Microfone Ao Vivo
+        audio_group = QGroupBox("🎙️ Voz Neural Ultra-Rápida (~0.8s) / Gemini 3.8 TTS & Microfone")
         audio_layout = QGridLayout(audio_group)
 
         audio_layout.addWidget(QLabel("Voz do Robô:"), 0, 0)
@@ -186,7 +216,7 @@ class CiborgueWorkbenchWindow(QMainWindow):
         btn_test_voice = QPushButton("🔊 Testar Voz + LipSync")
         btn_test_voice.clicked.connect(
             lambda: self.signals.say_requested.emit(
-                "Oi! Agora minha boca só começa a se mexer no exato instante em que o áudio sai na caixa de som!"
+                "Oi! Estou com resposta ultra rápida, memória na Flash NVS, Pomodoro e controle total do seu PC!"
             )
         )
         audio_layout.addWidget(btn_test_voice, 0, 2)
@@ -200,7 +230,7 @@ class CiborgueWorkbenchWindow(QMainWindow):
         audio_layout.addWidget(self.cmb_mic, 1, 1)
 
         self.btn_ptt = QPushButton("🎤 Ouvir Agora (Sem Wake Word)")
-        self.btn_ptt.setStyleSheet("background-color: #059669; color: white; font-weight: bold; padding: 6px;")
+        self.btn_ptt.setStyleSheet("background-color: #059669; color: white; font-weight: bold; padding: 5px;")
         self.btn_ptt.clicked.connect(self.on_trigger_listen_now)
         audio_layout.addWidget(self.btn_ptt, 1, 2)
 
@@ -213,20 +243,28 @@ class CiborgueWorkbenchWindow(QMainWindow):
 
         right_col.addWidget(audio_group)
 
-        # 3. Provisionamento NVS
-        nvs_group = QGroupBox("🔐 Provisionamento NVS (Memória Flash Permanente do ESP32-S3)")
+        # 3. Painel Modular de Assistente Pessoal (Tarefas NVS, Memórias, Pomodoro e Carinho)
+        self.assistant_panel = AssistantFeaturesPanel(
+            send_serial_fn=self.serial_bridge.send_cmd,
+            trigger_widget_fn=self.face_canvas.show_holographic_widget,
+            parent=self
+        )
+        right_col.addWidget(self.assistant_panel)
+
+        # 4. Provisionamento NVS Compacto
+        nvs_group = QGroupBox("🔐 Provisionamento NVS (Wi-Fi, Gemini API Key e Cidade)")
         nvs_layout = QGridLayout(nvs_group)
 
-        nvs_layout.addWidget(QLabel("Wi-Fi SSID:"), 0, 0)
+        nvs_layout.addWidget(QLabel("SSID:"), 0, 0)
         self.inp_ssid = QLineEdit(os.getenv("WIFI_SSID", ""))
         nvs_layout.addWidget(self.inp_ssid, 0, 1)
 
-        nvs_layout.addWidget(QLabel("Senha Wi-Fi:"), 0, 2)
+        nvs_layout.addWidget(QLabel("Senha:"), 0, 2)
         self.inp_pass = QLineEdit(os.getenv("WIFI_PASSWORD", ""))
         self.inp_pass.setEchoMode(QLineEdit.Password)
         nvs_layout.addWidget(self.inp_pass, 0, 3)
 
-        nvs_layout.addWidget(QLabel("Gemini Key:"), 1, 0)
+        nvs_layout.addWidget(QLabel("Key:"), 1, 0)
         self.inp_key = QLineEdit(os.getenv("GEMINI_API_KEY", ""))
         self.inp_key.setEchoMode(QLineEdit.Password)
         nvs_layout.addWidget(self.inp_key, 1, 1)
@@ -235,14 +273,14 @@ class CiborgueWorkbenchWindow(QMainWindow):
         self.inp_city = QLineEdit(os.getenv("DEFAULT_CITY", "Sao Paulo"))
         nvs_layout.addWidget(self.inp_city, 1, 3)
 
-        btn_save_nvs = QPushButton("💾 Gravar no .env e na Flash NVS do ESP32-S3")
-        btn_save_nvs.setStyleSheet("background-color: #0284c7; color: white; font-weight: bold; padding: 6px;")
+        btn_save_nvs = QPushButton("💾 Gravar no .env e na Flash NVS")
+        btn_save_nvs.setStyleSheet("background-color: #0284c7; color: white; font-weight: bold;")
         btn_save_nvs.clicked.connect(self.save_and_provision_nvs)
-        nvs_layout.addWidget(btn_save_nvs, 2, 0, 1, 4)
+        nvs_layout.addWidget(btn_save_nvs, 1, 4)
 
         right_col.addWidget(nvs_group)
 
-        # 4. Console de Conversa e Logs
+        # 5. Console de Conversa e Logs
         chat_group = QGroupBox("💬 Conversa com o Cérebro Gemini no ESP32-S3 & Logs")
         chat_layout = QVBoxLayout(chat_group)
 
@@ -252,7 +290,7 @@ class CiborgueWorkbenchWindow(QMainWindow):
 
         inp_row = QHBoxLayout()
         self.inp_chat = QLineEdit()
-        self.inp_chat.setPlaceholderText("Digite uma pergunta ou fale no microfone dizendo 'Ciborgue'...")
+        self.inp_chat.setPlaceholderText("Ex: 'Anote a tarefa estudar C++', 'Aumente o volume do PC', 'Inicie um Pomodoro'...")
         self.inp_chat.returnPressed.connect(self.on_send_chat)
         inp_row.addWidget(self.inp_chat)
 
@@ -279,11 +317,31 @@ class CiborgueWorkbenchWindow(QMainWindow):
         self.signals.conv_window_changed.connect(self.on_conv_window_changed)
         self.signals.audio_lipsync_frame.connect(self.face_canvas.set_audio_lipsync)
 
+        # Sinais dos novos módulos
+        self.signals.memories_updated.connect(self.assistant_panel.update_memories_list)
+        self.signals.tasks_updated.connect(self.on_tasks_updated)
+        self.signals.pomodoro_updated.connect(self.on_pomodoro_updated)
+        self.signals.widget_triggered.connect(self.face_canvas.show_holographic_widget)
+        self.signals.pc_action_requested.connect(self.pc_controller.execute_from_esp32)
+        self.signals.pet_triggered.connect(self.on_pet_triggered)
+
     def _get_current_api_key(self) -> str:
         return self.inp_key.text().strip() or os.getenv("GEMINI_API_KEY", "").strip()
 
+    def on_tasks_updated(self, tasks: list):
+        self.face_canvas.tasks_cache = tasks
+        self.assistant_panel.update_tasks_list(tasks)
+
+    def on_pomodoro_updated(self, pomo: dict):
+        self.face_canvas.update_pomodoro_overlay(pomo)
+        self.assistant_panel.update_pomodoro_status(pomo)
+
+    def on_pet_triggered(self):
+        self.face_canvas.trigger_emotion_impulse("LOVE")
+        self.append_log("💖 <b>[Carinho Detectado]</b> O Ciborgue recebeu carinho na cabeça (GPIO 1 / Tela)!")
+
     def on_voice_changed(self, idx: int):
-        voice_code = self.cmb_voice.itemData(idx) or "Puck"
+        voice_code = self.cmb_voice.itemData(idx) or "Edge-Antonio"
         self.tts_manager.selected_voice = voice_code
         self.append_log(f"🎙️ Voz do Ciborgue alterada para: <b>{self.cmb_voice.currentText()}</b>")
 
@@ -313,7 +371,6 @@ class CiborgueWorkbenchWindow(QMainWindow):
             self.lbl_serial.setStyleSheet("color: #f87171; font-weight: bold;")
 
     def on_state_changed(self, state: str):
-        # Ignora SPEAK prematuro caso o áudio ainda esteja sendo sintetizado no Gemini TTS
         if state == "SPEAK" and not self.tts_manager.is_playing:
             return
         self.face_canvas.state = state
@@ -326,7 +383,7 @@ class CiborgueWorkbenchWindow(QMainWindow):
             if time.time() < self.face_canvas.continuous_until:
                 self.face_canvas.subtitle = "🟢 Conversa Contínua (8s) — Pode responder sem dizer 'Ciborgue'!"
             else:
-                self.face_canvas.subtitle = "Ciborgue Pronto — Diga 'Ciborgue' ou clique em '🎤 Ouvir Agora'"
+                self.face_canvas.subtitle = "Ciborgue Pronto — Diga 'Ciborgue' ou faça carinho no topo da tela!"
 
     def on_emotion_changed(self, emotion: str):
         self.face_canvas.trigger_emotion_impulse(emotion)
@@ -336,20 +393,12 @@ class CiborgueWorkbenchWindow(QMainWindow):
         self.face_canvas.led_mode = mode
 
     def on_say_requested(self, text: str):
-        """
-        Recebido quando o ESP32-S3 envia EVT:SAY=<texto>.
-        Mantém o robô em THINK (boca fechada!) enquanto o Gemini 3.8 TTS gera o áudio WAV.
-        """
         if self.face_canvas.state != "SPEAK":
             self.face_canvas.state = "THINK"
-            self.face_canvas.subtitle = "🎙️ Sintetizando voz expressiva..."
+            self.face_canvas.subtitle = "🎙️ Preparando voz..."
         self.tts_manager.enqueue(text)
 
     def on_speech_playback_started(self, text: str):
-        """
-        Disparado no exato milissegundo em que o primeiro pacote PCM sai na caixa de som!
-        Agora sim ativa o estado SPEAK, a legenda e o LipSync!
-        """
         self.face_canvas.state = "SPEAK"
         self.face_canvas.subtitle = text
         self.append_log(f"<b style='color:#38bdf8'>🤖 CIBORGUE ({self.tts_manager.selected_voice}):</b> {text}")

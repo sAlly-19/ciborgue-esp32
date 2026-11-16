@@ -12,10 +12,12 @@
 #include "nvs_config.h"
 #include "led_controller.h"
 #include "display_hal.h"
+#include "memory_manager.h"
+#include "pomodoro_manager.h"
+#include "touch_sensor.h"
 #include "tools_controller.h"
 #include "gemini_brain.h"
 
-// Callback externo definido em main.cpp para processar comandos unificados
 extern void processSerialCommand(String cmd);
 extern void setRobotState(RobotState newState);
 extern void setRobotEmotion(FaceEmotion newEmotion);
@@ -28,6 +30,9 @@ private:
     NvsConfigManager& nvs;
     LedController& led;
     DisplayHAL& display;
+    MemoryManager& memory;
+    PomodoroManager& pomodoro;
+    TouchHeadSensor& touchSensor;
     ToolsController& tools;
     GeminiBrain& brain;
     volatile RobotState& currentState;
@@ -71,13 +76,16 @@ private:
             doc["timer_label"] = "";
         }
 
+        doc["pomo_active"] = pomodoro.isActive();
+        doc["pomo_rem_s"]  = pomodoro.getRemainingSec();
+        doc["pomo_goal"]   = pomodoro.getGoal();
+
         String out;
         serializeJson(doc, out);
         return out;
     }
 
     void setupRoutes() {
-        // Preflight CORS
         server.onNotFound([this]() {
             if (server.method() == HTTP_OPTIONS) {
                 addCorsHeaders();
@@ -88,13 +96,11 @@ private:
             server.send(404, "application/json", "{\"ok\":false,\"error\":\"Endpoint nao encontrado\"}");
         });
 
-        // 1. GET /api/status - Telemetria completa em tempo real para o App Android
         server.on("/api/status", HTTP_GET, [this]() {
             addCorsHeaders();
             server.send(200, "application/json", buildStatusJson());
         });
 
-        // 2. POST /api/chat - Envia pergunta/voz para o Cérebro Gemini no ESP32-S3
         server.on("/api/chat", HTTP_POST, [this]() {
             addCorsHeaders();
             JsonDocument req;
@@ -135,7 +141,6 @@ private:
             server.send(200, "application/json", out);
         });
 
-        // 3. POST /api/emotion - Altera expressão facial 296x240
         server.on("/api/emotion", HTTP_POST, [this]() {
             addCorsHeaders();
             JsonDocument req;
@@ -146,7 +151,6 @@ private:
             server.send(200, "application/json", buildStatusJson());
         });
 
-        // 4. POST /api/state - Altera estado operacional (IDLE, LISTEN, THINK, SPEAK, SLEEP, ALERT)
         server.on("/api/state", HTTP_POST, [this]() {
             addCorsHeaders();
             JsonDocument req;
@@ -157,7 +161,6 @@ private:
             server.send(200, "application/json", buildStatusJson());
         });
 
-        // 5. POST /api/led - Controla LED RGB WS2812 (GPIO 48) por RGB ou nome/efeito
         server.on("/api/led", HTTP_POST, [this]() {
             addCorsHeaders();
             JsonDocument req;
@@ -183,7 +186,6 @@ private:
             server.send(200, "application/json", buildStatusJson());
         });
 
-        // 6. POST /api/timer - Define um timer/alarme no ESP32-S3
         server.on("/api/timer", HTTP_POST, [this]() {
             addCorsHeaders();
             JsonDocument req;
@@ -203,7 +205,64 @@ private:
             server.send(200, "application/json", out);
         });
 
-        // 7. POST /api/config - Provisiona NVS Flash remotamente (Wi-Fi, Gemini API Key, Cidade)
+        // Endpoint de Tarefas NVS (/api/tasks)
+        server.on("/api/tasks", HTTP_GET, [this]() {
+            addCorsHeaders();
+            server.send(200, "application/json", memory.getTasksJson());
+        });
+
+        server.on("/api/tasks", HTTP_POST, [this]() {
+            addCorsHeaders();
+            JsonDocument req;
+            deserializeJson(req, server.arg("plain"));
+            String action = req["action"] | "add";
+            String title = req["title"] | "";
+            int id = req["id"] | 1;
+            tools.toolGerenciarTarefas(action, title, id);
+            server.send(200, "application/json", memory.getTasksJson());
+        });
+
+        // Endpoint de Memórias de Longo Prazo NVS (/api/memories)
+        server.on("/api/memories", HTTP_GET, [this]() {
+            addCorsHeaders();
+            server.send(200, "application/json", memory.getMemoriesJson());
+        });
+
+        server.on("/api/memories", HTTP_POST, [this]() {
+            addCorsHeaders();
+            JsonDocument req;
+            deserializeJson(req, server.arg("plain"));
+            String action = req["action"] | "adicionar";
+            String fact = req["fact"] | req["fato"] | "";
+            tools.toolSalvarMemoria(action, fact);
+            server.send(200, "application/json", memory.getMemoriesJson());
+        });
+
+        // Endpoint de Pomodoro (/api/pomodoro)
+        server.on("/api/pomodoro", HTTP_POST, [this]() {
+            addCorsHeaders();
+            JsonDocument req;
+            deserializeJson(req, server.arg("plain"));
+            String action = req["action"] | "iniciar";
+            int focus = req["focus_min"] | 25;
+            int brk = req["break_min"] | 5;
+            String goal = req["goal"] | "Foco";
+            String msg = tools.toolIniciarPomodoro(action, focus, brk, goal);
+            JsonDocument res;
+            res["ok"] = true;
+            res["message"] = msg;
+            String out;
+            serializeJson(res, out);
+            server.send(200, "application/json", out);
+        });
+
+        // Endpoint de Carinho (/api/pet)
+        server.on("/api/pet", HTTP_POST, [this]() {
+            addCorsHeaders();
+            touchSensor.triggerPetReaction(true);
+            server.send(200, "application/json", buildStatusJson());
+        });
+
         server.on("/api/config", HTTP_POST, [this]() {
             addCorsHeaders();
             JsonDocument req;
@@ -231,7 +290,6 @@ private:
             server.send(200, "application/json", buildStatusJson());
         });
 
-        // 8. POST /api/command - Ponte direta para qualquer comando do protocolo Serial (MIC:, CMD:, RGB:, etc.)
         server.on("/api/command", HTTP_POST, [this]() {
             addCorsHeaders();
             JsonDocument req;
@@ -244,7 +302,6 @@ private:
             server.send(200, "application/json", buildStatusJson());
         });
 
-        // 9. POST /api/clear_history - Limpa memória de conversa do Gemini
         server.on("/api/clear_history", HTTP_POST, [this]() {
             addCorsHeaders();
             brain.clearHistory();
@@ -253,9 +310,11 @@ private:
     }
 
 public:
-    WifiApiServer(NvsConfigManager& n, LedController& l, DisplayHAL& d, ToolsController& t,
+    WifiApiServer(NvsConfigManager& n, LedController& l, DisplayHAL& d, MemoryManager& mem,
+                  PomodoroManager& pomo, TouchHeadSensor& touch, ToolsController& t,
                   GeminiBrain& b, volatile RobotState& st, FaceEmotion& emo, RobotTimer& tmr)
-        : server(80), nvs(n), led(l), display(d), tools(t), brain(b),
+        : server(80), nvs(n), led(l), display(d), memory(mem), pomodoro(pomo),
+          touchSensor(touch), tools(t), brain(b),
           currentState(st), currentEmotion(emo), activeTimer(tmr) {}
 
     void beginIfWifiConnected() {
@@ -264,7 +323,7 @@ public:
         server.begin();
         MDNS.begin("ciborgue");
         MDNS.addService("http", "tcp", 80);
-        udp.begin(4210); // Porta UDP 4210 para auto-descoberta pelo App Android na rede local
+        udp.begin(4210);
         started = true;
         Serial.printf("EVT:LOG=Servidor HTTP Android ativo em http://%s e http://ciborgue.local (UDP 4210)\n",
                       WiFi.localIP().toString().c_str());
@@ -277,7 +336,6 @@ public:
         }
         server.handleClient();
 
-        // Auto-descoberta UDP para o App Android ("CIBORGUE_DISCOVER" -> responde JSON com IP)
         int packetSize = udp.parsePacket();
         if (packetSize > 0) {
             char buf[128];

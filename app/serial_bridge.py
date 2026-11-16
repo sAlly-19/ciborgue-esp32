@@ -5,7 +5,11 @@ import threading
 import serial
 import serial.tools.list_ports
 
+from app.config import PROJECT_ROOT
 from app.signals import BridgeSignals
+
+
+MIRROR_JSON_PATH = PROJECT_ROOT / "ciborgue_memory_mirror.json"
 
 
 def find_esp32_port(preferred: str = "AUTO") -> str:
@@ -30,7 +34,8 @@ def find_esp32_port(preferred: str = "AUTO") -> str:
 class SerialBridgeManager:
     """
     Gerencia a conexão bidirecional USB Serial com o ESP32-S3,
-    auto-reconexão, provisionamento inicial NVS e decodificação de eventos EVT:*.
+    auto-reconexão, provisionamento inicial NVS, espelhamento JSON local
+    e decodificação de todos os eventos EVT:*.
     """
     def __init__(self, signals: BridgeSignals):
         self.signals = signals
@@ -38,6 +43,24 @@ class SerialBridgeManager:
         self.lock = threading.Lock()
         self.running = True
         self.provisioned_once = False
+        self.mirror_state = {"memories": [], "tasks": []}
+        self._load_local_mirror()
+
+    def _load_local_mirror(self):
+        try:
+            if MIRROR_JSON_PATH.exists():
+                self.mirror_state = json.loads(MIRROR_JSON_PATH.read_text(encoding="utf-8"))
+        except Exception:
+            pass
+
+    def _save_local_mirror(self):
+        try:
+            MIRROR_JSON_PATH.write_text(
+                json.dumps(self.mirror_state, ensure_ascii=False, indent=2),
+                encoding="utf-8"
+            )
+        except Exception:
+            pass
 
     def start(self):
         threading.Thread(target=self._worker_loop, daemon=True).start()
@@ -131,6 +154,7 @@ class SerialBridgeManager:
             except Exception:
                 pass
             return
+
         if line.startswith("EVT:STATE="):
             st = line.split("=", 1)[1].strip()
             self.signals.state_changed.emit(st)
@@ -151,6 +175,42 @@ class SerialBridgeManager:
                 self.signals.telemetry_received.emit(data)
             except Exception:
                 pass
+        elif line.startswith("EVT:MEMORIES="):
+            try:
+                mems = json.loads(line.split("=", 1)[1].strip())
+                self.mirror_state["memories"] = mems
+                self._save_local_mirror()
+                self.signals.memories_updated.emit(mems)
+            except Exception:
+                pass
+        elif line.startswith("EVT:TASKS="):
+            try:
+                tasks = json.loads(line.split("=", 1)[1].strip())
+                self.mirror_state["tasks"] = tasks
+                self._save_local_mirror()
+                self.signals.tasks_updated.emit(tasks)
+            except Exception:
+                pass
+        elif line.startswith("EVT:POMODORO="):
+            try:
+                pomo = json.loads(line.split("=", 1)[1].strip())
+                self.signals.pomodoro_updated.emit(pomo)
+            except Exception:
+                pass
+        elif line.startswith("EVT:WIDGET="):
+            try:
+                wdata = json.loads(line.split("=", 1)[1].strip())
+                self.signals.widget_triggered.emit(wdata)
+            except Exception:
+                pass
+        elif line.startswith("EVT:PC="):
+            try:
+                pc_data = json.loads(line.split("=", 1)[1].strip())
+                self.signals.pc_action_requested.emit(pc_data)
+            except Exception:
+                pass
+        elif line.startswith("EVT:PET="):
+            self.signals.pet_triggered.emit()
         elif line.startswith("EVT:LOG="):
             msg = line.split("=", 1)[1].strip()
             self.signals.log_message.emit(f"<span style='color:#94a3b8'>[ESP32] {msg}</span>")

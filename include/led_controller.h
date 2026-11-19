@@ -14,12 +14,24 @@ private:
     int animStep = 10;
     bool animUp = true;
     uint16_t rainbowHue = 0;
+    volatile float brightnessScale = 1.0f;
 
     void writeHardware(uint8_t r, uint8_t g, uint8_t b) {
-        currentR = r;
-        currentG = g;
-        currentB = b;
-        neopixelWrite(PIN_RGB_LED, r, g, b);
+        if (r == 0 && g == 0 && b == 0) {
+            currentR = 0;
+            currentG = 0;
+            currentB = 0;
+            neopixelWrite(PIN_RGB_LED, 0, 0, 0);
+            return;
+        }
+        float scale = brightnessScale;
+        uint8_t sr = (uint8_t)constrain((int)(r * scale), 0, 255);
+        uint8_t sg = (uint8_t)constrain((int)(g * scale), 0, 255);
+        uint8_t sb = (uint8_t)constrain((int)(b * scale), 0, 255);
+        currentR = sr;
+        currentG = sg;
+        currentB = sb;
+        neopixelWrite(PIN_RGB_LED, sr, sg, sb);
     }
 
     void hsvToRgb(uint16_t h, uint8_t s, uint8_t v, uint8_t &r, uint8_t &g, uint8_t &b) {
@@ -50,6 +62,16 @@ public:
 
     void setStateMode() {
         effectMode = LED_MODE_STATE;
+    }
+
+    void setBrightnessScale(float scale) {
+        if (scale < 0.0f) scale = 0.0f;
+        if (scale > 1.0f) scale = 1.0f;
+        brightnessScale = scale;
+    }
+
+    void turnOff() {
+        writeHardware(0, 0, 0);
     }
 
     void setCustomColor(uint8_t r, uint8_t g, uint8_t b, LedEffectMode mode = LED_MODE_SOLID) {
@@ -154,6 +176,13 @@ public:
             case STATE_ALERT: {
                 bool flash = ((now / 160) % 2) == 0;
                 writeHardware(flash ? 140 : 15, flash ? 45 : 0, 0);
+                break;
+            }
+            case STATE_PORTAL: {
+                // Pulso duplo azul-royal/ciano indicando Portal Cativo Wi-Fi aberto
+                unsigned long phase = now % 1200UL;
+                bool pulseOn = (phase < 160UL) || (phase >= 280UL && phase < 440UL);
+                writeHardware(0, pulseOn ? 110 : 10, pulseOn ? 255 : 40);
                 break;
             }
             default:

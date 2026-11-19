@@ -6,9 +6,9 @@ powershell -NoProfile -Command "Get-CimInstance Win32_Process | Where-Object { $
 timeout /t 1 /nobreak >nul
 
 echo Compilando e gravando firmware C++ no ESP32-S3 (COM4)...
-"C:\Users\aliss\AppData\Local\Python\pythoncore-3.14-64\Scripts\pio.exe" run --target upload
+python -m platformio run --target upload
 
 echo.
 echo Iniciando novamente a Bancada Virtual 296x240...
-start "" "C:\Users\aliss\AppData\Local\Python\pythoncore-3.14-64\python.exe" ciborgue.py
+start "" python ciborgue.py
 pause

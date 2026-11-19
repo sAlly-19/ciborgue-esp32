@@ -22,3 +22,7 @@ class BridgeSignals(QObject):
     widget_triggered = Signal(dict)
     pc_action_requested = Signal(dict)
     pet_triggered = Signal()
+    alarms_updated = Signal(list)
+    personality_updated = Signal(dict)
+    desk_clock_changed = Signal(bool)
+    timer_updated = Signal(dict)

@@ -6,6 +6,8 @@
 #include "robot_types.h"
 #include "led_controller.h"
 #include "display_hal.h"
+#include "sfx_synth.h"
+#include "personality_manager.h"
 
 enum PomodoroPhase {
     POMO_INACTIVE = 0,
@@ -17,6 +19,8 @@ class PomodoroManager {
 private:
     LedController& led;
     DisplayHAL& display;
+    SfxSynth& sfx;
+    PersonalityManager& personality;
     volatile RobotState& currentState;
     FaceEmotion& currentEmotion;
 
@@ -29,8 +33,9 @@ private:
     unsigned long lastTickEmitMillis = 0;
 
 public:
-    PomodoroManager(LedController& l, DisplayHAL& d, volatile RobotState& st, FaceEmotion& emo)
-        : led(l), display(d), currentState(st), currentEmotion(emo) {}
+    PomodoroManager(LedController& l, DisplayHAL& d, SfxSynth& s, PersonalityManager& pm,
+                    volatile RobotState& st, FaceEmotion& emo)
+        : led(l), display(d), sfx(s), personality(pm), currentState(st), currentEmotion(emo) {}
 
     bool isActive() const { return phase != POMO_INACTIVE; }
     PomodoroPhase getPhase() const { return phase; }
@@ -63,7 +68,10 @@ public:
         // Olhar concentrado e LED azul ciano suave
         currentEmotion = EMO_NEUTRAL;
         display.setEmotion(EMO_NEUTRAL);
+        display.syncPomodoro(true, true, focusDurationSec, focusDurationSec, goalLabel);
+        display.showPomodoroWidget();
         led.setCustomColor(0, 140, 255, LED_MODE_PULSE);
+        sfx.play(SFX_POMO_FOCUS);
         Serial.println("EVT:EMOTION=NEUTRAL");
         emitStatusPacket(true);
 
@@ -76,6 +84,7 @@ public:
             return "O modo Pomodoro já está desligado.";
         }
         phase = POMO_INACTIVE;
+        display.syncPomodoro(false, true, 0, 1500, goalLabel);
         led.setStateMode();
         emitStatusPacket(false);
         return "Modo Pomodoro encerrado.";
@@ -100,6 +109,7 @@ public:
         unsigned long now = millis();
         if (now - lastTickEmitMillis >= 1000) {
             lastTickEmitMillis = now;
+            display.syncPomodoro(true, phase == POMO_FOCUS, getRemainingSec(), getTotalPhaseSec(), goalLabel);
             emitStatusPacket(false);
         }
 
@@ -111,7 +121,11 @@ public:
                 targetMillis = now + ((unsigned long)breakDurationSec * 1000UL);
                 currentEmotion = EMO_HAPPY;
                 display.setEmotion(EMO_HAPPY);
+                display.syncPomodoro(true, false, breakDurationSec, breakDurationSec, goalLabel);
+                display.showPomodoroWidget();
+                personality.onPomodoroCompleted();
                 led.setCustomColor(0, 255, 140, LED_MODE_RAINBOW);
+                sfx.play(SFX_POMO_BREAK);
                 Serial.println("EVT:EMOTION=HAPPY");
                 emitStatusPacket(true);
 
@@ -125,7 +139,9 @@ public:
                 phase = POMO_INACTIVE;
                 currentEmotion = EMO_WINK;
                 display.setEmotion(EMO_WINK);
+                display.syncPomodoro(false, true, 0, 1500, goalLabel);
                 led.setStateMode();
+                sfx.play(SFX_HAPPY);
                 Serial.println("EVT:EMOTION=WINK");
                 emitStatusPacket(true);
 

@@ -22,6 +22,18 @@ def synthesize_robot_sfx(kind: str, sample_rate: int = 24000) -> bytes:
         notes = [(660, 990, 0.06), (990, 1480, 0.09)]
     elif kind == "think":
         notes = [(480, 620, 0.05), (720, 540, 0.05), (640, 860, 0.06)]
+    elif kind == "fear":
+        notes = [(620, 740, 0.06), (700, 860, 0.06), (780, 660, 0.09)]
+    elif kind == "disgust":
+        notes = [(340, 210, 0.11), (230, 145, 0.15)]
+    elif kind == "contempt":
+        notes = [(420, 380, 0.06), (320, 250, 0.09)]
+    elif kind == "shame":
+        notes = [(760, 620, 0.07), (580, 640, 0.09)]
+    elif kind == "despair":
+        notes = [(740, 520, 0.12), (500, 340, 0.14), (330, 190, 0.20)]
+    elif kind == "malice":
+        notes = [(460, 620, 0.06), (540, 760, 0.06), (660, 940, 0.10)]
     else:
         notes = [(600, 880, 0.08)]
 

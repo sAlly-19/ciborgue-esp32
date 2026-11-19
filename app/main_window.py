@@ -53,6 +53,9 @@ class CiborgueWorkbenchWindow(QMainWindow):
         self.assistant_panel.update_memories_list(self.serial_bridge.mirror_state.get("memories", []))
         self.assistant_panel.update_tasks_list(self.serial_bridge.mirror_state.get("tasks", []))
         self.face_canvas.tasks_cache = self.serial_bridge.mirror_state.get("tasks", [])
+        self.on_alarms_updated(self.serial_bridge.mirror_state.get("alarms", []))
+        if isinstance(self.serial_bridge.mirror_state.get("personality"), dict):
+            self.on_personality_updated(self.serial_bridge.mirror_state["personality"])
 
         self.serial_bridge.start()
         self.tts_manager.start()
@@ -128,6 +131,7 @@ class CiborgueWorkbenchWindow(QMainWindow):
 
         self.face_canvas = FaceCanvas296x240(
             on_pet_callback=lambda: self.serial_bridge.send_cmd("CMD:PET"),
+            on_tap_callback=self.on_canvas_tap,
             parent=self
         )
         left_col.addWidget(self.face_canvas, alignment=Qt.AlignCenter)
@@ -140,7 +144,10 @@ class CiborgueWorkbenchWindow(QMainWindow):
             ("😊 Feliz", "HAPPY"), ("😐 Neutro", "NEUTRAL"),
             ("😮 Surpreso", "SURPRISED"), ("😉 Piscadinha", "WINK"),
             ("😍 Apaixonado", "LOVE"), ("😢 Triste", "SAD"),
-            ("😠 Bravo", "ANGRY"), ("😴 Sonolento", "SLEEPY")
+            ("😠 Bravo", "ANGRY"), ("😴 Sonolento", "SLEEPY"),
+            ("😨 Medo", "FEAR"), ("🤢 Nojo", "DISGUST"),
+            ("😒 Desprezo", "CONTEMPT"), ("😳 Vergonha", "SHAME"),
+            ("😱 Desespero", "DESPAIR"), ("😈 Malícia", "MALICE")
         ]
         for idx, (label, code) in enumerate(emotions):
             btn = QPushButton(label)
@@ -160,26 +167,25 @@ class CiborgueWorkbenchWindow(QMainWindow):
         for idx, (label, cmd_val) in enumerate(colors):
             btn = QPushButton(label)
             btn.clicked.connect(lambda _, v=cmd_val: self.serial_bridge.send_cmd(f"CMD:COLOR={v}"))
-            emo_grid.addWidget(btn, 2 + (idx // 4), idx % 4)
+            emo_grid.addWidget(btn, 4 + (idx // 4), idx % 4)
 
-        # Linha rápida de Widgets / Briefing / PC Status
-        btn_brief = QPushButton("☀️ Briefing do Dia")
-        btn_brief.setStyleSheet("background-color: #0284c7; color: white;")
-        btn_brief.clicked.connect(lambda: self.serial_bridge.send_cmd("MIC:Me dê o briefing do dia!"))
-        emo_grid.addWidget(btn_brief, 4, 0)
+        # Linha rápida de Widgets / Relógio de Mesa / Humor / Carinho
+        self.btn_desk_clock = QPushButton("🕰️ Relógio Mesa")
+        self.btn_desk_clock.clicked.connect(self.toggle_desk_clock)
+        emo_grid.addWidget(self.btn_desk_clock, 6, 0)
 
-        btn_w_tasks = QPushButton("📋 Widget Tarefas")
+        btn_w_tasks = QPushButton("📋 Tarefas")
         btn_w_tasks.clicked.connect(lambda: self.face_canvas.show_holographic_widget({"type": "TASKS"}))
-        emo_grid.addWidget(btn_w_tasks, 4, 1)
+        emo_grid.addWidget(btn_w_tasks, 6, 1)
 
-        btn_pc_stat = QPushButton("💻 Diagnóstico PC")
-        btn_pc_stat.clicked.connect(lambda: self.pc_controller.execute_from_esp32({"action": "pc_status"}))
-        emo_grid.addWidget(btn_pc_stat, 4, 2)
+        btn_w_mood = QPushButton("💛 Humor")
+        btn_w_mood.clicked.connect(self.on_show_mood_card)
+        emo_grid.addWidget(btn_w_mood, 6, 2)
 
-        btn_pet_quick = QPushButton("🤚 Fazer Carinho")
+        btn_pet_quick = QPushButton("🤚 Carinho")
         btn_pet_quick.setStyleSheet("background-color: #db2777; color: white;")
         btn_pet_quick.clicked.connect(lambda: self.serial_bridge.send_cmd("CMD:PET"))
-        emo_grid.addWidget(btn_pet_quick, 4, 3)
+        emo_grid.addWidget(btn_pet_quick, 6, 3)
 
         left_col.addWidget(emo_group)
         left_col.addStretch(1)
@@ -324,9 +330,53 @@ class CiborgueWorkbenchWindow(QMainWindow):
         self.signals.widget_triggered.connect(self.face_canvas.show_holographic_widget)
         self.signals.pc_action_requested.connect(self.pc_controller.execute_from_esp32)
         self.signals.pet_triggered.connect(self.on_pet_triggered)
+        self.signals.alarms_updated.connect(self.on_alarms_updated)
+        self.signals.personality_updated.connect(self.on_personality_updated)
+        self.signals.desk_clock_changed.connect(self.on_desk_clock_changed)
+        self.signals.timer_updated.connect(self.on_timer_updated)
 
     def _get_current_api_key(self) -> str:
         return self.inp_key.text().strip() or os.getenv("GEMINI_API_KEY", "").strip()
+
+    def on_canvas_tap(self, action: str):
+        if action == "ALARM_STOP":
+            self.serial_bridge.send_cmd("CMD:ALARM_STOP")
+            self.append_log("🔕 <b>[Alarme]</b> Alarme silenciado pelo toque na tela.")
+        elif action == "DESK_CLOCK_OFF":
+            self.serial_bridge.send_cmd("CMD:DESK_CLOCK=0")
+            self.on_desk_clock_changed(False)
+        elif action == "WIDGET_CLOSE":
+            self.serial_bridge.send_cmd("CMD:WIDGET_CLOSE")
+
+    def toggle_desk_clock(self):
+        nxt = not self.face_canvas.desk_clock_active
+        self.serial_bridge.send_cmd(f"CMD:DESK_CLOCK={'1' if nxt else '0'}")
+        self.on_desk_clock_changed(nxt)
+
+    def on_show_mood_card(self):
+        self.serial_bridge.send_cmd("CMD:MOOD_CARD")
+        self.face_canvas.show_holographic_widget({"type": "MOOD", **self.face_canvas.personality_state})
+
+    def on_alarms_updated(self, alarms: list):
+        self.face_canvas.update_alarms_cache(alarms)
+        self.assistant_panel.update_alarms_list(alarms)
+
+    def on_personality_updated(self, pet: dict):
+        self.face_canvas.update_personality_state(pet)
+        self.assistant_panel.update_personality_status(pet)
+
+    def on_desk_clock_changed(self, active: bool):
+        self.face_canvas.set_desk_clock(active)
+        self.assistant_panel.set_desk_clock_ui(active)
+        if active:
+            self.btn_desk_clock.setStyleSheet("background-color: #0284c7; color: white;")
+            self.btn_desk_clock.setText("🕰️ Sair Relógio")
+        else:
+            self.btn_desk_clock.setStyleSheet("")
+            self.btn_desk_clock.setText("🕰️ Relógio Mesa")
+
+    def on_timer_updated(self, tdata: dict):
+        self.face_canvas.update_timer_state(tdata)
 
     def on_tasks_updated(self, tasks: list):
         self.face_canvas.tasks_cache = tasks
@@ -352,7 +402,7 @@ class CiborgueWorkbenchWindow(QMainWindow):
 
     def on_trigger_listen_now(self):
         self.mic_listener.trigger_push_to_talk()
-        self.face_canvas.subtitle = "🎤 Escutando! Pode falar seu comando agora..."
+        self.append_log("🎤 <b>[Push-to-Talk]</b> Microfone ativado — pode falar seu comando!")
 
     def on_conv_window_changed(self, until_ts: float):
         self.face_canvas.continuous_until = until_ts
@@ -374,16 +424,8 @@ class CiborgueWorkbenchWindow(QMainWindow):
         if state == "SPEAK" and not self.tts_manager.is_playing:
             return
         self.face_canvas.state = state
-        if state == "LISTEN":
-            self.face_canvas.subtitle = "🎤 Ouvindo você..."
-        elif state == "THINK":
+        if state == "THINK":
             play_sfx_async("think")
-            self.face_canvas.subtitle = "🧠 ESP32-S3 consultando Gemini via Wi-Fi..."
-        elif state == "IDLE":
-            if time.time() < self.face_canvas.continuous_until:
-                self.face_canvas.subtitle = "🟢 Conversa Contínua (8s) — Pode responder sem dizer 'Ciborgue'!"
-            else:
-                self.face_canvas.subtitle = "Ciborgue Pronto — Diga 'Ciborgue' ou faça carinho no topo da tela!"
 
     def on_emotion_changed(self, emotion: str):
         self.face_canvas.trigger_emotion_impulse(emotion)
@@ -395,12 +437,10 @@ class CiborgueWorkbenchWindow(QMainWindow):
     def on_say_requested(self, text: str):
         if self.face_canvas.state != "SPEAK":
             self.face_canvas.state = "THINK"
-            self.face_canvas.subtitle = "🎙️ Preparando voz..."
         self.tts_manager.enqueue(text)
 
     def on_speech_playback_started(self, text: str):
         self.face_canvas.state = "SPEAK"
-        self.face_canvas.subtitle = text
         self.append_log(f"<b style='color:#38bdf8'>🤖 CIBORGUE ({self.tts_manager.selected_voice}):</b> {text}")
 
     def on_telemetry_received(self, data: dict):
@@ -418,6 +458,29 @@ class CiborgueWorkbenchWindow(QMainWindow):
             data.get("led_g", 80),
             data.get("led_b", 255)
         )
+
+        if "timer_rem_s" in data:
+            rem_t = int(data.get("timer_rem_s", 0))
+            self.face_canvas.update_timer_state({
+                "active": rem_t > 0,
+                "rem_s": rem_t,
+                "total_s": int(data.get("timer_total_s", max(60, rem_t))),
+                "label": data.get("timer_label", "Timer")
+            })
+        if "desk_clock" in data:
+            self.on_desk_clock_changed(bool(data.get("desk_clock", False)))
+        if "alarm_ringing" in data:
+            is_ring = bool(data.get("alarm_ringing", False))
+            if not is_ring and self.face_canvas.alarm_ringing:
+                self.face_canvas.show_holographic_widget({"type": "NONE"})
+            self.face_canvas.alarm_ringing = is_ring
+        if "affection" in data:
+            self.on_personality_updated({
+                "affection": data.get("affection", 65),
+                "energy": data.get("energy", 85),
+                "mood": data.get("mood", 15),
+                "label": data.get("mood_label", "Animado")
+            })
 
         wifi_ok = data.get("wifi_ok", False)
         ssid = data.get("wifi_ssid", "")

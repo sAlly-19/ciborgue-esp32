@@ -6,11 +6,18 @@
 #include "robot_types.h"
 #include "led_controller.h"
 #include "display_hal.h"
+#include "sfx_synth.h"
+#include "personality_manager.h"
+
+extern void notifyUserActivity();
+extern bool handlePriorityTapAction();
 
 class TouchHeadSensor {
 private:
     LedController& led;
     DisplayHAL& display;
+    SfxSynth& sfx;
+    PersonalityManager& personality;
     volatile RobotState& currentState;
     FaceEmotion& currentEmotion;
 
@@ -29,8 +36,9 @@ private:
     };
 
 public:
-    TouchHeadSensor(LedController& l, DisplayHAL& d, volatile RobotState& st, FaceEmotion& emo)
-        : led(l), display(d), currentState(st), currentEmotion(emo) {}
+    TouchHeadSensor(LedController& l, DisplayHAL& d, SfxSynth& s, PersonalityManager& pm,
+                    volatile RobotState& st, FaceEmotion& emo)
+        : led(l), display(d), sfx(s), personality(pm), currentState(st), currentEmotion(emo) {}
 
     void begin() {
 #if ENABLE_TOUCH_SENSOR
@@ -54,21 +62,39 @@ public:
 #endif
     }
 
-    void triggerPetReaction(bool speakOutLoud = true) {
+    void triggerPetReaction(bool speakOutLoud = true, bool fromPhysicalTouch = false) {
+        notifyUserActivity();
+        if (fromPhysicalTouch && handlePriorityTapAction()) {
+            lastPetReactionMillis = millis();
+            return;
+        }
         lastPetReactionMillis = millis();
-        currentEmotion = EMO_LOVE;
-        display.setEmotion(EMO_LOVE);
-        led.setCustomColor(255, 50, 150, LED_MODE_PULSE);
+        FaceEmotion emo = personality.onPet();
+        currentEmotion = emo;
+        display.setEmotion(emo);
+        if (emo == EMO_SHAME) {
+            led.setCustomColor(255, 110, 170, LED_MODE_PULSE);
+            sfx.play(SFX_SHAME);
+        } else {
+            led.setCustomColor(255, 50, 150, LED_MODE_PULSE);
+            sfx.play(SFX_LOVE);
+        }
 
-        Serial.println("EVT:EMOTION=LOVE");
+        Serial.printf("EVT:EMOTION=%s\n", emotionToString(emo));
         Serial.println("EVT:PET=1");
 
         if (speakOutLoud && currentState != STATE_SPEAK && currentState != STATE_THINK) {
-            const char* phrase = PET_PHRASES[phraseIndex % 4];
+            const char* phrase = (emo == EMO_SHAME)
+                ? "Ai... assim eu fico até sem graça com tanto carinho!"
+                : PET_PHRASES[phraseIndex % 4];
             phraseIndex++;
-            display.setSubtitle(phrase);
             Serial.printf("EVT:SAY=%s\n", phrase);
         }
+    }
+
+    void resetAfterWake() {
+        consecutiveHits = 0;
+        lastCheckMillis = millis();
     }
 
     void update() {
@@ -78,9 +104,14 @@ public:
         if (now - lastCheckMillis < 40) return; // Amostragem a 25 Hz
         lastCheckMillis = now;
 
-        // Evita disparo durante fala ou dentro do cooldown de 7 segundos
-        if (currentState == STATE_SPEAK || currentState == STATE_THINK) return;
-        if (now - lastPetReactionMillis < 7000) return;
+        // Evita disparo dentro do cooldown curto, mas permite toque prioritário durante alarme/widget/desk-clock
+        bool canInterrupt = handlePriorityTapActionCheckOnly();
+        if (!canInterrupt) {
+            if (currentState == STATE_SPEAK || currentState == STATE_THINK) return;
+            if (now - lastPetReactionMillis < 7000) return;
+        } else if (now - lastPetReactionMillis < 900) {
+            return;
+        }
 
         float val = (float)touchRead(PIN_TOUCH_HEAD);
         if (val <= 100.0f) return;
@@ -91,9 +122,9 @@ public:
             consecutiveHits++;
             if (consecutiveHits >= 4) { // 160ms de toque contínuo confirmado
                 consecutiveHits = 0;
-                Serial.printf("EVT:LOG=Carinho físico detectado no GPIO %d (leitura=%.0f, base=%.0f)\n",
+                Serial.printf("EVT:LOG=Toque físico detectado no GPIO %d (leitura=%.0f, base=%.0f)\n",
                               PIN_TOUCH_HEAD, val, baseline);
-                triggerPetReaction(true);
+                triggerPetReaction(true, true);
             }
         } else {
             consecutiveHits = 0;
@@ -101,6 +132,10 @@ public:
             baseline = 0.995f * baseline + 0.005f * val;
         }
 #endif
+    }
+
+    bool handlePriorityTapActionCheckOnly() const {
+        return display.isDeskClockActive() || display.hasActiveCard() || (currentState == STATE_ALERT);
     }
 };
 

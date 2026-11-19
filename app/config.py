@@ -33,7 +33,13 @@ EMOTION_SPEECH_STYLES = {
     "WINK": "playful, witty and charming",
     "SAD": "soft, gentle and slightly melancholic",
     "ANGRY": "dramatic, firm and energetic",
-    "SLEEPY": "calm, sleepy, soft and slow"
+    "SLEEPY": "calm, sleepy, soft and slow",
+    "FEAR": "nervous, trembling, hesitant and scared",
+    "DISGUST": "repulsed, grimacing, dramatic and reluctant",
+    "CONTEMPT": "dry, sarcastic, aloof and unimpressed",
+    "SHAME": "shy, bashful, embarrassed and soft-spoken",
+    "DESPAIR": "dramatic, overwhelmed, distressed and urgent",
+    "MALICE": "mischievous, teasing, sly and playful"
 }
 
 # Prosódia emocional (velocidade e tom) para o motor Neural Ultra-Rápido (Edge-TTS)
@@ -45,7 +51,13 @@ EDGE_EMOTION_PROSODY = {
     "WINK":      ("+16%", "+7Hz"),
     "SAD":       ("+4%",  "-3Hz"),
     "ANGRY":     ("+18%", "+2Hz"),
-    "SLEEPY":    ("-4%",  "-4Hz")
+    "SLEEPY":    ("-4%",  "-4Hz"),
+    "FEAR":      ("+22%", "+8Hz"),
+    "DISGUST":   ("+2%",  "-5Hz"),
+    "CONTEMPT":  ("+0%",  "-4Hz"),
+    "SHAME":     ("-2%",  "+2Hz"),
+    "DESPAIR":   ("+24%", "+4Hz"),
+    "MALICE":    ("+10%", "-2Hz")
 }
 
 # Dimensões lógicas da tela física Estardyn 2.01" TFT SPI (JD9853 em modo Paisagem)

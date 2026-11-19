@@ -171,7 +171,13 @@ class SerialBridgeManager:
                 )
                 if r.status_code == 200:
                     self._apply_wifi_status_dict(r.json(), speak_on_new_reply=(cmd == "CMD:PET"))
-                    if cmd.startswith("CMD:TASK_") or cmd.startswith("CMD:MEM_"):
+                    if (
+                        cmd.startswith("CMD:TASK_")
+                        or cmd.startswith("CMD:MEM_")
+                        or cmd.startswith("CMD:ALARM_")
+                        or cmd in ("CMD:PET", "CMD:MOOD_CARD")
+                        or cmd.startswith("CMD:DESK_CLOCK=")
+                    ):
                         self._sync_wifi_tasks_and_memories(ip)
         except Exception as e:
             self.signals.log_message.emit(f"⚠️ Aviso Wi-Fi ({ip}): {e}")
@@ -220,6 +226,22 @@ class SerialBridgeManager:
                     self.mirror_state["memories"] = mems
                     self._save_local_mirror()
                     self.signals.memories_updated.emit(mems)
+
+            ra = self.http_session.get(f"http://{ip}/api/alarms", timeout=3)
+            if ra.status_code == 200:
+                alarms = ra.json()
+                if isinstance(alarms, list):
+                    self.mirror_state["alarms"] = alarms
+                    self._save_local_mirror()
+                    self.signals.alarms_updated.emit(alarms)
+
+            rp = self.http_session.get(f"http://{ip}/api/personality", timeout=3)
+            if rp.status_code == 200:
+                pet = rp.json()
+                if isinstance(pet, dict):
+                    self.mirror_state["personality"] = pet
+                    self._save_local_mirror()
+                    self.signals.personality_updated.emit(pet)
         except Exception:
             pass
 
@@ -236,6 +258,26 @@ class SerialBridgeManager:
             "goal": data.get("pomo_goal", "Foco")
         }
         self.signals.pomodoro_updated.emit(pomo)
+
+        if "desk_clock" in data:
+            self.signals.desk_clock_changed.emit(bool(data.get("desk_clock", False)))
+
+        if "timer_rem_s" in data:
+            rem_t = int(data.get("timer_rem_s", 0))
+            self.signals.timer_updated.emit({
+                "active": rem_t > 0,
+                "rem_s": rem_t,
+                "total_s": int(data.get("timer_total_s", max(60, rem_t))),
+                "label": data.get("timer_label", "Timer")
+            })
+
+        if "affection" in data:
+            self.signals.personality_updated.emit({
+                "affection": data.get("affection", 65),
+                "energy": data.get("energy", 85),
+                "mood": data.get("mood", 15),
+                "label": data.get("mood_label", "Animado")
+            })
 
         reply = str(data.get("last_reply", "")).strip()
         if self.last_wifi_reply is None:
@@ -389,6 +431,27 @@ class SerialBridgeManager:
                 self.signals.pomodoro_updated.emit(pomo)
             except Exception:
                 pass
+        elif line.startswith("EVT:ALARMS="):
+            try:
+                alarms = json.loads(line.split("=", 1)[1].strip())
+                if isinstance(alarms, list):
+                    self.mirror_state["alarms"] = alarms
+                    self._save_local_mirror()
+                    self.signals.alarms_updated.emit(alarms)
+            except Exception:
+                pass
+        elif line.startswith("EVT:PERSONALITY="):
+            try:
+                pet = json.loads(line.split("=", 1)[1].strip())
+                if isinstance(pet, dict):
+                    self.mirror_state["personality"] = pet
+                    self._save_local_mirror()
+                    self.signals.personality_updated.emit(pet)
+            except Exception:
+                pass
+        elif line.startswith("EVT:DESK_CLOCK="):
+            val = line.split("=", 1)[1].strip()
+            self.signals.desk_clock_changed.emit(val in ("1", "true", "TRUE", "ON"))
         elif line.startswith("EVT:WIDGET="):
             try:
                 wdata = json.loads(line.split("=", 1)[1].strip())
@@ -408,4 +471,19 @@ class SerialBridgeManager:
             self.signals.log_message.emit(f"<span style='color:#94a3b8'>[ESP32] {msg}</span>")
         elif line.startswith("EVT:TIMER="):
             info = line.split("=", 1)[1].strip()
-            self.signals.log_message.emit(f"<span style='color:#fbbf24'>⏰ Timer agendado no ESP32: {info}</span>")
+            parts = info.split(",", 1)
+            try:
+                rem_s = max(0, int(parts[0].strip()))
+            except Exception:
+                rem_s = 0
+            label = parts[1].strip() if len(parts) > 1 else ""
+            self.signals.timer_updated.emit({
+                "active": rem_s > 0,
+                "rem_s": rem_s,
+                "total_s": max(1, rem_s) if rem_s > 0 else 60,
+                "label": label or "Timer"
+            })
+            if rem_s > 0:
+                self.signals.log_message.emit(f"<span style='color:#fbbf24'>⏰ Timer agendado no ESP32: {rem_s}s ({label or 'Timer'})</span>")
+            else:
+                self.signals.log_message.emit("<span style='color:#94a3b8'>⏰ Timer finalizado no ESP32.</span>")

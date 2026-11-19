@@ -9,13 +9,16 @@
 #endif
 
 class AudioHAL {
+private:
+    bool txReady = false;
+
 public:
     void begin() {
 #if ENABLE_PHYSICAL_AUDIO
         // 1. Configuração do Microfone I2S (INMP441) em I2S_NUM_0
         i2s_config_t micConfig = {
             .mode = (i2s_mode_t)(I2S_MODE_MASTER | I2S_MODE_RX),
-            .sample_rate = 16000,
+            .sample_rate = SFX_SAMPLE_RATE,
             .bits_per_sample = I2S_BITS_PER_SAMPLE_16BIT,
             .channel_format = I2S_CHANNEL_FMT_ONLY_LEFT,
             .communication_format = I2S_COMM_FORMAT_STAND_I2S,
@@ -38,7 +41,7 @@ public:
         // 2. Configuração do Amplificador I2S (MAX98357A) em I2S_NUM_1
         i2s_config_t ampConfig = {
             .mode = (i2s_mode_t)(I2S_MODE_MASTER | I2S_MODE_TX),
-            .sample_rate = 16000,
+            .sample_rate = SFX_SAMPLE_RATE,
             .bits_per_sample = I2S_BITS_PER_SAMPLE_16BIT,
             .channel_format = I2S_CHANNEL_FMT_ONLY_LEFT,
             .communication_format = I2S_COMM_FORMAT_STAND_I2S,
@@ -55,12 +58,43 @@ public:
             .data_out_num = PIN_I2S_AMP_DIN,
             .data_in_num = I2S_PIN_NO_CHANGE
         };
-        i2s_driver_install(I2S_NUM_1, &ampConfig, 0, NULL);
-        i2s_set_pin(I2S_NUM_1, &ampPins);
+        if (i2s_driver_install(I2S_NUM_1, &ampConfig, 0, NULL) == ESP_OK) {
+            i2s_set_pin(I2S_NUM_1, &ampPins);
+            i2s_zero_dma_buffer(I2S_NUM_1);
+            txReady = true;
+        }
 
         Serial.println("EVT:LOG=Drivers I2S (INMP441 + MAX98357A) inicializados!");
 #else
+        txReady = false;
         Serial.println("EVT:LOG=Audio I2S em Modo Ponte Virtual PC (ENABLE_PHYSICAL_AUDIO=0)");
+#endif
+    }
+
+    bool writePcm(const int16_t* samples, size_t sampleCount) {
+#if ENABLE_PHYSICAL_AUDIO
+        if (!txReady || samples == nullptr || sampleCount == 0) return false;
+        size_t bytesWritten = 0;
+        esp_err_t err = i2s_write(
+            I2S_NUM_1,
+            samples,
+            sampleCount * sizeof(int16_t),
+            &bytesWritten,
+            pdMS_TO_TICKS(150)
+        );
+        return err == ESP_OK;
+#else
+        (void)samples;
+        (void)sampleCount;
+        return true;
+#endif
+    }
+
+    void clearTxDma() {
+#if ENABLE_PHYSICAL_AUDIO
+        if (txReady) {
+            i2s_zero_dma_buffer(I2S_NUM_1);
+        }
 #endif
     }
 };

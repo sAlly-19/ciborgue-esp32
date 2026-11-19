@@ -11,6 +11,9 @@
 #include "nvs_config.h"
 #include "memory_manager.h"
 #include "tools_controller.h"
+#include "sfx_synth.h"
+#include "offline_engine.h"
+#include "personality_manager.h"
 
 struct ChatMessage {
     String role; // "user" ou "model"
@@ -22,22 +25,29 @@ private:
     NvsConfigManager& nvs;
     MemoryManager& memory;
     ToolsController& tools;
+    OfflineCommandEngine& offlineEngine;
+    SfxSynth& sfx;
+    PersonalityManager& personality;
     std::vector<ChatMessage> history;
     WiFiClientSecure tlsClient;
     int preferredModelIdx = 0;
     String lastReplyText = "Ciborgue Pronto";
+    int consecutiveTransportFails = 0;
+    unsigned long circuitOpenUntil = 0;
 
     const char* BASE_SYSTEM_PROMPT =
         "Você é o 'Ciborgue', um robô de mesa inteligente, expressivo, ágil e verdadeiro assistente pessoal. "
         "Seu cérebro roda nativamente em C++ dentro de um ESP32-S3 (N16R8 com 16MB Flash e 8MB PSRAM), "
-        "equipado com LED RGB WS2812 no GPIO 48, sensor de carinho capacitivo no GPIO 1 e tela Estardyn 2.01 polegadas (296x240) com rosto estilo Eilik/BMO e Mini-Widgets Holográficos. "
+        "equipado com LED RGB WS2812 no GPIO 48, sensor de carinho capacitivo no GPIO 1 e tela Estardyn 2.01 polegadas (296x240) com rosto estilo Eilik/BMO e Cards Full-Screen Vetoriais. "
         "REGRA DE VELOCIDADE MÁXIMA: Para reagir sem atraso extra, SEMPRE inicie sua resposta textual com a tag da sua emoção entre colchetes: "
-        "[HAPPY], [NEUTRAL], [WINK], [SURPRISED], [SAD], [ANGRY], [LOVE] ou [SLEEPY] (exemplo: '[HAPPY] Oi! Tudo ótimo por aqui!'). "
+        "[HAPPY], [NEUTRAL], [WINK], [SURPRISED], [SAD], [ANGRY], [LOVE], [SLEEPY], [FEAR], [DISGUST], [CONTEMPT], [SHAME], [DESPAIR] ou [MALICE] (exemplo: '[HAPPY] Oi! Tudo ótimo por aqui!'). "
         "NÃO chame a ferramenta 'mudar_expressao_rosto' se puder apenas colocar a tag [EMOCAO] no começo da frase. "
         "Suas respostas serão faladas em voz alta: responda em 1 a 2 frases curtas, diretas e sem formatação markdown. "
         "Use suas ferramentas quando pedirem para: mudar cor do LED, ver hora/data, criar timer, checar hardware do ESP32, consultar clima, "
         "salvar memórias/notas permanentes ('salvar_memoria_usuario'), gerenciar lista de tarefas To-Do ('gerenciar_tarefas'), "
-        "dar o resumo/bom dia ('briefing_do_dia'), iniciar/parar sessões de estudo ('iniciar_pomodoro') ou controlar o PC Windows ('controlar_computador').";
+        "gerenciar despertadores recorrentes ('gerenciar_alarmes'), ativar/sair do relógio de mesa ('modo_relogio'), mostrar seu humor/afeto ('ver_humor_robo'), "
+        "dar o resumo/bom dia ('briefing_do_dia'), iniciar/parar sessões de estudo ('iniciar_pomodoro'), "
+        "controlar o PC Windows ('controlar_computador'), ajustar som/volume nativo ('configurar_audio') ou dormir/modo eco ('modo_sono').";
 
     void appendToHistory(const String& role, const String& text) {
         if (text.length() == 0) return;
@@ -62,7 +72,7 @@ private:
 
     int sendGeminiPostSingle(const String& apiKey, const char* modelName, const String& payloadStr, String& responseOut) {
         tlsClient.setInsecure();
-        tlsClient.setTimeout(10);
+        tlsClient.setTimeout(6);
 
         HTTPClient https;
         https.setReuse(true);
@@ -73,7 +83,7 @@ private:
             return -1;
         }
         https.addHeader("Content-Type", "application/json");
-        https.setTimeout(9500);
+        https.setTimeout(GEMINI_CONNECT_TIMEOUT_MS);
 
         int httpCode = https.POST(payloadStr);
         if (httpCode > 0) {
@@ -96,6 +106,9 @@ private:
             responseOut = "";
             int prefCode = sendGeminiPostSingle(apiKey, usedModelInOut.c_str(), payloadStr, responseOut);
             if (prefCode == 200) {
+                consecutiveTransportFails = 0;
+                circuitOpenUntil = 0;
+                nvs.setApiReachable(true);
                 return 200;
             }
             Serial.printf("EVT:LOG=Modelo %s ocupou cota (%d), acionando fallback automático...\n",
@@ -103,6 +116,7 @@ private:
         }
 
         int lastCode = -1;
+        int transportFailsThisCall = 0;
         for (int attempt = 0; attempt < numModels; attempt++) {
             int i = (preferredModelIdx + attempt) % numModels;
             if (usedModelInOut.length() > 0 && usedModelInOut.equals(models[i])) {
@@ -114,25 +128,55 @@ private:
             if (code == 200) {
                 preferredModelIdx = i;
                 usedModelInOut = models[i];
+                consecutiveTransportFails = 0;
+                circuitOpenUntil = 0;
+                nvs.setApiReachable(true);
                 return 200;
+            }
+            if (code <= 0) {
+                transportFailsThisCall++;
+                if (transportFailsThisCall >= 2) {
+                    break;
+                }
             }
             if (code == 429 || code == 503 || code == 500 || code == 404 || code < 0) {
                 int nextIdx = (i + 1) % numModels;
                 Serial.printf("EVT:LOG=Modelo %s retornou HTTP %d, alternando para %s...\n",
                               models[i], code, models[nextIdx]);
-                delay(80);
+                delay(50);
                 continue;
             } else {
                 break;
+            }
+        }
+
+        if (lastCode <= 0) {
+            consecutiveTransportFails++;
+            if (consecutiveTransportFails >= GEMINI_CIRCUIT_FAIL_THRESHOLD) {
+                circuitOpenUntil = millis() + GEMINI_CIRCUIT_OPEN_MS;
+                nvs.setApiReachable(false);
+                sfx.play(SFX_OFFLINE);
+                Serial.println("EVT:LOG=Circuit Breaker Gemini ABERTO (60s em Modo Offline rápido).");
             }
         }
         return lastCode;
     }
 
 public:
-    GeminiBrain(NvsConfigManager& n, MemoryManager& m, ToolsController& t)
-        : nvs(n), memory(m), tools(t) {
+    GeminiBrain(NvsConfigManager& n, MemoryManager& m, ToolsController& t,
+                OfflineCommandEngine& off, SfxSynth& s, PersonalityManager& pm)
+        : nvs(n), memory(m), tools(t), offlineEngine(off), sfx(s), personality(pm) {
         tlsClient.setInsecure();
+    }
+
+    bool isCircuitOpen() const {
+        return circuitOpenUntil > 0 && (long)(millis() - circuitOpenUntil) < 0;
+    }
+
+    void resetCircuit() {
+        consecutiveTransportFails = 0;
+        circuitOpenUntil = 0;
+        nvs.setApiReachable(true);
     }
 
     String getLastReply() const { return lastReplyText; }
@@ -143,15 +187,26 @@ public:
     }
 
     String ask(const String& userPrompt) {
-        if (!nvs.isWifiConnected()) {
-            return "Meu Wi-Fi no ESP32 ainda não está conectado. Configure o SSID e a senha no painel.";
+        personality.onInteraction();
+
+        String fastReply;
+        if (offlineEngine.tryFastPath(userPrompt, fastReply)) {
+            Serial.println("EVT:LOG=[Fast-Path Local <5ms]");
+            lastReplyText = fastReply;
+            return fastReply;
         }
-        if (!nvs.hasGeminiKey()) {
-            return "Minha chave da API do Gemini ainda não foi gravada na memória NVS do ESP32.";
+
+        if (!nvs.isWifiConnected() || !nvs.hasGeminiKey() || isCircuitOpen()) {
+            Serial.printf("EVT:LOG=[Modo Offline Resiliente] net=%s\n", netModeToString(nvs.getNetMode()));
+            String offReply = offlineEngine.handleOffline(userPrompt);
+            lastReplyText = offReply;
+            return offReply;
         }
 
         String apiKey = nvs.getGeminiKey();
-        String fullSystemPrompt = String(BASE_SYSTEM_PROMPT) + memory.buildContextForGemini();
+        String fullSystemPrompt = String(BASE_SYSTEM_PROMPT) +
+                                  memory.buildContextForGemini() +
+                                  personality.buildContextForGemini();
 
         JsonDocument reqDoc;
         reqDoc["system_instruction"]["parts"][0]["text"] = fullSystemPrompt;
@@ -173,6 +228,7 @@ public:
 
         String activeModel = "";
         String fallbackToolSummary = "";
+        sfx.play(SFX_THINK, 0.85f);
 
         for (int round = 0; round < 2; round++) {
             String payload;
@@ -188,7 +244,9 @@ public:
                     lastReplyText = fallbackToolSummary;
                     return fallbackToolSummary;
                 }
-                return "Tive uma oscilação ao comunicar com a API do Gemini pelo Wi-Fi do ESP32.";
+                String offFallback = offlineEngine.handleOffline(userPrompt);
+                lastReplyText = offFallback;
+                return offFallback;
             }
 
             JsonDocument respDoc;

@@ -258,6 +258,10 @@ public:
         return out;
     }
 
+    const std::vector<TodoTaskItem>& getTasks() const {
+        return tasks;
+    }
+
     void emitMemoriesPacket() const {
         Serial.printf("EVT:MEMORIES=%s\n", getMemoriesJson().c_str());
     }

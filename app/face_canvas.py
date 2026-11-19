@@ -18,26 +18,26 @@ class FaceCanvas296x240(QWidget):
     """
     Simulador na proporção exata da tela Estardyn 2.01" TFT SPI (296x240 Paisagem).
     Renderiza:
-    - Moldura/Cabeça 3D do Ciborgue com auriculares laterais RGB e visor de alto contraste
+    - Rosto em tela cheia limpa com fundo OLED de alto contraste (sem moldura ou orelhas)
     - Olhos 3D estilo Cozmo/Eilik com recorte booleano real (QPainterPath.subtracted) sem máscaras escuras
     - Bochechas vibrantes estilo Eilik/BMO com brilho rosado e traços de rubor
     - Boca BMO com LipSync estritamente acoplado ao áudio PCM
-    - Layout Dividido Híbrido (Mini-Widgets Holográficos à direita)
+    - Modo Híbrido v2: Tela 100% Pura + Pílula Superior Condicional + Cards de Tela Cheia
     """
     LOGICAL_W = SCREEN_LOGICAL_W
     LOGICAL_H = SCREEN_LOGICAL_H
     SCALE = SCREEN_PREVIEW_SCALE
 
-    def __init__(self, on_pet_callback=None, parent=None):
+    def __init__(self, on_pet_callback=None, on_tap_callback=None, parent=None):
         super().__init__(parent)
         self.setFixedSize(self.LOGICAL_W * self.SCALE, self.LOGICAL_H * self.SCALE)
         self.setCursor(Qt.PointingHandCursor)
         self.on_pet_callback = on_pet_callback
+        self.on_tap_callback = on_tap_callback
         self.last_mouse_pet_ts = 0.0
 
         self.state = "IDLE"
         self.emotion = "NEUTRAL"
-        self.subtitle = "Ciborgue Pronto — Diga 'Ciborgue' ou faça carinho no topo da tela!"
         self.telemetry = {
             "temp_c": 0.0,
             "wifi_ok": False,
@@ -46,18 +46,33 @@ class FaceCanvas296x240(QWidget):
             "ip": "0.0.0.0",
             "psram_kb": 0,
             "timer_rem_s": 0,
-            "timer_label": ""
+            "timer_label": "",
+            "portal_active": False,
+            "ap_ip": "",
+            "net_mode": ""
         }
         self.led_rgb = (0, 180, 255)
         self.led_mode = "STATE"
         self.continuous_until = 0.0
 
-        # Estado dos Mini-Widgets Holográficos e Pomodoro
+        # Estado do Modo Híbrido (Cards de Tela Cheia, Pílula Condicional, Relógio de Mesa, Alarmes & Humor)
         self.active_widget = {}
         self.widget_until_ts = 0.0
+        self.widget_duration_sec = 8.0
+        self.desk_clock_active = False
+        self.alarm_ringing = False
         self.tasks_cache = []
         self.pomodoro_state = {"active": False, "phase": "FOCUS", "rem_s": 0, "total_s": 1500, "goal": ""}
-        self.sp_split_ratio = SpringValue(0.0, stiffness=0.16, damping=0.76)
+        self.pomodoro_end_ts = 0.0
+        self.timer_state = {"active": False, "rem_s": 0, "total_s": 60, "label": ""}
+        self.timer_end_ts = 0.0
+        self.personality_state = {
+            "affection": 65, "energy": 85, "mood": 15,
+            "label": "Animado", "pet_count": 0, "chat_count": 0
+        }
+        self.weather_cache = {}
+        self.alarms_cache = []
+        self.sp_overlay_alpha = SpringValue(0.0, stiffness=0.20, damping=0.78)
 
         # Controle de Piscada com Squash & Stretch
         self.anim_tick = 0.0
@@ -92,26 +107,108 @@ class FaceCanvas296x240(QWidget):
 
     def mousePressEvent(self, event):
         logical_y = event.position().y() / self.SCALE
-        logical_x = event.position().x() / self.SCALE
-        if self.sp_split_ratio.val > 0.4 and logical_x > 138:
-            self.widget_until_ts = 0.0
+        if self.alarm_ringing:
+            self.alarm_ringing = False
+            if self.active_widget.get("type") == "ALARM_RING":
+                self.active_widget = {}
+            if self.on_tap_callback:
+                self.on_tap_callback("ALARM_STOP")
             return
-        if logical_y < 115 and (time.time() - self.last_mouse_pet_ts) > 2.5:
+
+        if self.desk_clock_active:
+            self.desk_clock_active = False
+            if self.active_widget.get("type") == "DESK_CLOCK":
+                self.active_widget = {}
+            if self.on_tap_callback:
+                self.on_tap_callback("DESK_CLOCK_OFF")
+            return
+
+        if self.sp_overlay_alpha.val > 0.25 and self.active_widget:
+            self.widget_until_ts = 0.0
+            self.active_widget = {}
+            if self.on_tap_callback:
+                self.on_tap_callback("WIDGET_CLOSE")
+            return
+
+        if logical_y < 140 and (time.time() - self.last_mouse_pet_ts) > 2.5:
             self.last_mouse_pet_ts = time.time()
             if self.on_pet_callback:
                 self.on_pet_callback()
             else:
                 self.trigger_emotion_impulse("LOVE")
 
-    def show_holographic_widget(self, widget_data: dict, duration_sec: float = 7.5):
-        self.active_widget = widget_data
-        self.widget_until_ts = time.time() + duration_sec
+    def show_holographic_widget(self, widget_data: dict, duration_sec: float = 8.0):
+        data = dict(widget_data) if isinstance(widget_data, dict) else {}
+        wtype = str(data.get("type", "")).upper()
+        if not wtype or wtype == "NONE":
+            self.active_widget = {}
+            self.widget_until_ts = 0.0
+            self.alarm_ringing = False
+            self.desk_clock_active = False
+            return
+
+        if wtype == "ALARM_RING":
+            self.alarm_ringing = True
+            self.active_widget = data
+            return
+
+        if wtype == "DESK_CLOCK":
+            self.desk_clock_active = True
+            self.active_widget = data
+            return
+
+        if wtype == "WEATHER":
+            self.weather_cache = dict(data)
+        elif wtype == "MOOD":
+            self.personality_state.update(data)
+        elif wtype == "TIMER":
+            self.update_timer_state(data)
+
+        self.active_widget = data
+        self.widget_duration_sec = max(1.0, float(duration_sec))
+        self.widget_until_ts = time.time() + self.widget_duration_sec
         self.sp_eye_squash.set(1.0, impulse=0.20)
 
     def update_pomodoro_overlay(self, pomo_data: dict):
-        self.pomodoro_state = pomo_data
+        if not isinstance(pomo_data, dict):
+            return
+        self.pomodoro_state = dict(pomo_data)
+        if pomo_data.get("active", False) and int(pomo_data.get("rem_s", 0)) > 0:
+            self.pomodoro_end_ts = time.time() + int(pomo_data.get("rem_s", 0))
+        else:
+            self.pomodoro_end_ts = 0.0
         if pomo_data.get("show_card", False):
-            self.show_holographic_widget({"type": "POMODORO"}, duration_sec=7.5)
+            self.show_holographic_widget({"type": "POMODORO", **pomo_data}, duration_sec=8.0)
+
+    def set_desk_clock(self, active: bool):
+        self.desk_clock_active = bool(active)
+        if self.desk_clock_active:
+            self.active_widget = {"type": "DESK_CLOCK"}
+        elif self.active_widget.get("type") == "DESK_CLOCK":
+            self.active_widget = {}
+
+    def update_timer_state(self, timer_data: dict):
+        if not isinstance(timer_data, dict):
+            return
+        rem_s = max(0, int(timer_data.get("rem_s", 0)))
+        active = bool(timer_data.get("active", rem_s > 0)) and rem_s > 0
+        total_s = max(rem_s, int(timer_data.get("total_s", self.timer_state.get("total_s", max(60, rem_s)))))
+        label = str(timer_data.get("label", self.timer_state.get("label", "Timer")) or "Timer")
+        self.timer_state = {
+            "active": active,
+            "rem_s": rem_s,
+            "total_s": max(1, total_s),
+            "label": label
+        }
+        self.timer_end_ts = (time.time() + rem_s) if active else 0.0
+
+    def update_personality_state(self, pet_data: dict):
+        if isinstance(pet_data, dict):
+            self.personality_state.update(pet_data)
+
+    def update_alarms_cache(self, alarms: list):
+        if isinstance(alarms, list):
+            self.alarms_cache = list(alarms)
 
     def trigger_emotion_impulse(self, emotion: str):
         self.emotion = emotion
@@ -144,6 +241,42 @@ class FaceCanvas296x240(QWidget):
             self.sp_tilt.set(4.0)
             self.sp_gaze_y.set(5.0)
             self._spawn_particles("zzz", 3)
+        elif emotion == "FEAR":
+            self.sp_eye_squash.set(1.06, impulse=0.30)
+            self.sp_tilt.set(-3.0)
+            self.sp_gaze_x.set(0.0)
+            self.sp_gaze_y.set(-4.0)
+            self._spawn_particles("sweat", 4)
+            play_sfx_async("fear")
+        elif emotion == "DISGUST":
+            self.sp_tilt.set(6.5)
+            self.sp_gaze_x.set(-7.0)
+            self.sp_gaze_y.set(-3.0)
+            self._spawn_particles("nausea", 4)
+            play_sfx_async("disgust")
+        elif emotion == "CONTEMPT":
+            self.sp_tilt.set(-5.0)
+            self.sp_gaze_x.set(11.0)
+            self.sp_gaze_y.set(-2.0)
+            play_sfx_async("contempt")
+        elif emotion == "SHAME":
+            self.sp_tilt.set(6.0)
+            self.sp_gaze_x.set(-10.0)
+            self.sp_gaze_y.set(8.0)
+            self._spawn_particles("sweat", 2)
+            play_sfx_async("shame")
+        elif emotion == "DESPAIR":
+            self.sp_tilt.set(-6.0)
+            self.sp_gaze_x.set(0.0)
+            self.sp_gaze_y.set(4.0)
+            self._spawn_particles("tear", 6)
+            play_sfx_async("despair")
+        elif emotion == "MALICE":
+            self.sp_tilt.set(-7.5)
+            self.sp_gaze_x.set(8.0)
+            self.sp_gaze_y.set(-3.0)
+            self._spawn_particles("spark", 6)
+            play_sfx_async("malice")
         else:
             self.sp_tilt.set(0.0)
 
@@ -159,7 +292,7 @@ class FaceCanvas296x240(QWidget):
                 "x": random.uniform(35, 260),
                 "y": random.uniform(45, 145),
                 "vx": random.uniform(-0.6, 0.6),
-                "vy": random.uniform(-1.3, -0.5) if ptype != "tear" else random.uniform(0.8, 1.5),
+                "vy": random.uniform(-1.3, -0.5) if ptype not in ("tear", "sweat") else random.uniform(0.8, 1.5),
                 "size": random.uniform(5.0, 9.5),
                 "alpha": 255.0,
                 "phase": random.uniform(0, 6.28)
@@ -169,11 +302,21 @@ class FaceCanvas296x240(QWidget):
         now = time.time()
         self.anim_tick += 0.075
 
-        if now < self.widget_until_ts and self.active_widget:
-            self.sp_split_ratio.set(1.0)
-        else:
-            self.sp_split_ratio.set(0.0)
-        self.sp_split_ratio.step()
+        if self.timer_state.get("active", False) and self.timer_end_ts > 0.0:
+            rem_t = max(0, int(round(self.timer_end_ts - now)))
+            self.timer_state["rem_s"] = rem_t
+            if rem_t == 0:
+                self.timer_state["active"] = False
+        if self.pomodoro_state.get("active", False) and self.pomodoro_end_ts > 0.0:
+            self.pomodoro_state["rem_s"] = max(0, int(round(self.pomodoro_end_ts - now)))
+
+        has_temp = (now < self.widget_until_ts) and bool(self.active_widget)
+        has_overlay = self.alarm_ringing or self.desk_clock_active or has_temp
+        self.sp_overlay_alpha.set(1.0 if has_overlay else 0.0)
+        self.sp_overlay_alpha.step()
+
+        if not has_overlay and self.sp_overlay_alpha.val < 0.02 and self.active_widget:
+            self.active_widget = {}
 
         # 1. Piscada com Squash & Stretch
         if not self.is_blinking and self.blink_phase == 0.0 and now >= self.next_blink_time:
@@ -235,6 +378,16 @@ class FaceCanvas296x240(QWidget):
             self._spawn_particles("zzz", 1)
         elif self.emotion == "HAPPY" and random.random() < 0.05 and len(self.particles) < 6:
             self._spawn_particles("star", 1)
+        elif self.emotion == "FEAR" and random.random() < 0.06 and len(self.particles) < 5:
+            self._spawn_particles("sweat", 1)
+        elif self.emotion == "DISGUST" and random.random() < 0.05 and len(self.particles) < 5:
+            self._spawn_particles("nausea", 1)
+        elif self.emotion == "SHAME" and random.random() < 0.03 and len(self.particles) < 3:
+            self._spawn_particles("sweat", 1)
+        elif self.emotion == "DESPAIR" and random.random() < 0.12 and len(self.particles) < 10:
+            self._spawn_particles("tear", 1)
+        elif self.emotion == "MALICE" and random.random() < 0.06 and len(self.particles) < 6:
+            self._spawn_particles("spark", 1)
 
         # 3. LipSync Estritamente Sincronizado com o Som Real
         has_live_audio = (self.state == "SPEAK") and ((now - self.last_audio_frame_ts) < 0.12)
@@ -284,6 +437,18 @@ class FaceCanvas296x240(QWidget):
             return QColor(255, 90, 190)
         if self.emotion == "SAD":
             return QColor(85, 165, 255)
+        if self.emotion == "FEAR":
+            return QColor(150, 215, 255)
+        if self.emotion == "DISGUST":
+            return QColor(150, 235, 65)
+        if self.emotion == "CONTEMPT":
+            return QColor(155, 175, 225)
+        if self.emotion == "SHAME":
+            return QColor(255, 155, 185)
+        if self.emotion == "DESPAIR":
+            return QColor(115, 115, 255)
+        if self.emotion == "MALICE":
+            return QColor(195, 70, 255)
         return QColor(0, 238, 255)
 
     def paintEvent(self, event):
@@ -291,56 +456,32 @@ class FaceCanvas296x240(QWidget):
         painter.setRenderHint(QPainter.Antialiasing, True)
         painter.scale(self.SCALE, self.SCALE)
 
-        # 1. Fundo Externo do Display 296x240
+        # 1. Fundo Externo OLED do Display 296x240 (sem moldura interna ou orelhas)
         bg_path = QPainterPath()
         bg_path.addRoundedRect(QRectF(2, 2, self.LOGICAL_W - 4, self.LOGICAL_H - 4), 22, 22)
-        bg_grad = QLinearGradient(QPointF(0, 0), QPointF(0, self.LOGICAL_H))
-        bg_grad.setColorAt(0.0, QColor(15, 23, 38))
-        bg_grad.setColorAt(1.0, QColor(8, 12, 22))
+        bg_grad = QRadialGradient(QPointF(148, 118), 175)
+        bg_grad.setColorAt(0.0, QColor(16, 26, 46))
+        bg_grad.setColorAt(1.0, QColor(6, 10, 18))
         painter.fillPath(bg_path, QBrush(bg_grad))
 
-        painter.setPen(QPen(QColor(56, 82, 118), 2))
+        painter.setPen(QPen(QColor(38, 56, 84, 150), 1.5))
         painter.drawPath(bg_path)
 
-        # 2. Barra Superior
-        painter.setFont(QFont("Segoe UI", 7, QFont.Bold))
-        wifi_ok = self.telemetry.get("wifi_ok", False)
-        painter.setPen(QColor(0, 235, 125) if wifi_ok else QColor(255, 105, 85))
-        ssid = self.telemetry.get("wifi_ssid") or "Offline"
-        painter.drawText(14, 16, f"● Wi-Fi: {ssid}"[:22] if wifi_ok else "○ Wi-Fi: Offline")
-
-        temp_c = self.telemetry.get("temp_c", 0.0)
-        rem_window = max(0.0, self.continuous_until - time.time())
-        if rem_window > 0 and self.state == "IDLE":
-            painter.setPen(QColor(74, 222, 128))
-            painter.drawText(122, 16, f"🎤 Escuta Ativa ({rem_window:.0f}s)")
-        else:
-            painter.setPen(QColor(175, 195, 220))
-            painter.drawText(138, 16, f"{temp_c:.1f}°C | {self.state}")
-
-        lr, lg, lb = self.led_rgb
-        if lr == 0 and lg == 0 and lb == 0:
-            lr, lg, lb = (0, 195, 255)
-        painter.setPen(QPen(QColor(140, 165, 195), 1))
-        painter.setBrush(QBrush(QColor(lr, lg, lb)))
-        painter.drawEllipse(QPointF(274, 12), 5.5, 5.5)
-
-        # 2b. Barra Neon Discreta de Pomodoro (quando ativo)
-        WidgetsOverlayRenderer.draw_pomodoro_top_bar(painter, self.pomodoro_state, self.anim_tick)
-
-        # 3. Transformação 3D do Rosto (com suporte a Layout Dividido Híbrido)
+        # 2. Rosto Puro 296x240 Centralizado (sem barras, borda de capacete ou orelhas)
         painter.save()
-        split = max(0.0, min(1.0, self.sp_split_ratio.val))
-        face_scale = 1.0 - (0.37 * split)
-        target_center_x = 148.0 * (1.0 - split) + 72.0 * split
-        target_center_y = 112.0 * (1.0 - split) + 114.0 * split
-
-        painter.translate(target_center_x, target_center_y)
-        painter.scale(face_scale, face_scale)
+        painter.translate(148.0, 124.0)
+        painter.scale(1.16, 1.16)
         painter.translate(-148.0, -112.0)
 
         breath_y = math.sin(self.anim_tick * 0.9) * 2.2
-        shake_x = random.uniform(-1.8, 1.8) if self.emotion == "ANGRY" else 0.0
+        if self.emotion == "ANGRY":
+            shake_x = random.uniform(-1.8, 1.8)
+        elif self.emotion == "FEAR":
+            shake_x = random.uniform(-1.5, 1.5)
+        elif self.emotion == "DESPAIR":
+            shake_x = random.uniform(-2.0, 2.0)
+        else:
+            shake_x = 0.0
         gx = self.sp_gaze_x.val
         gy = self.sp_gaze_y.val
         tilt = self.sp_tilt.val
@@ -351,9 +492,6 @@ class FaceCanvas296x240(QWidget):
         painter.translate(-face_cx, -face_cy)
 
         face_color = self.get_face_color()
-
-        # 3a. Moldura do Rosto / Capacete Ciborgue (destaca claramente o rosto do fundo!)
-        self._draw_cyborg_visor_frame(painter, 148.0, 112.0 + breath_y * 0.5, face_color, (lr, lg, lb))
 
         left_persp = 1.0 - (gx / 130.0)
         right_persp = 1.0 + (gx / 130.0)
@@ -370,15 +508,36 @@ class FaceCanvas296x240(QWidget):
             base_h *= 1.12
         elif self.emotion == "SLEEPY":
             base_h *= 0.35
+        elif self.emotion == "FEAR":
+            base_w *= 0.96
+            base_h *= 1.10
+        elif self.emotion == "DISGUST":
+            base_w *= 1.02
+            base_h *= 0.72
+        elif self.emotion == "CONTEMPT":
+            base_w *= 1.02
+            base_h *= 0.85
+        elif self.emotion == "SHAME":
+            base_w *= 0.90
+            base_h *= 0.80
+        elif self.emotion == "DESPAIR":
+            base_w *= 1.04
+            base_h *= 1.08
+        elif self.emotion == "MALICE":
+            base_w *= 1.04
+            base_h *= 0.82
 
         left_cx = 94.0 + gx
         right_cx = 202.0 + gx
         eye_cy = 88.0 + gy + breath_y
 
         # 3b. Olhos 3D com Recorte Booleano Real (sem círculos escuros cobrindo as bochechas!)
+        left_h = max(5.0, base_h * left_persp)
+        if self.emotion == "DISGUST":
+            left_h = max(5.0, left_h * 0.78)
         self._draw_single_eye(
             painter, left_cx, eye_cy,
-            base_w * left_persp, max(5.0, base_h * left_persp),
+            base_w * left_persp, left_h,
             face_color, is_left=True
         )
         right_h = 6.0 if self.emotion == "WINK" else max(5.0, base_h * right_persp * (1.0 - self.idle_curious_squint))
@@ -388,9 +547,16 @@ class FaceCanvas296x240(QWidget):
             face_color, is_left=False
         )
 
-        # 3c. Bochechas Coradas Vibrantes (exibidas apenas no modo Feliz e Apaixonado)
+        # 3c. Bochechas Coradas Vibrantes e Gota de Suor (Medo / Vergonha)
         if self.emotion in ("HAPPY", "LOVE"):
             self._draw_blush_cheeks(painter, left_cx - 12, right_cx + 12, eye_cy + 44, 1.0)
+        elif self.emotion == "SHAME":
+            self._draw_blush_cheeks(painter, left_cx - 10, right_cx + 10, eye_cy + 40, 1.35)
+
+        if self.emotion in ("FEAR", "SHAME"):
+            drop_scale = 1.0 if self.emotion == "FEAR" else 0.75
+            drop_y = eye_cy - 18 + math.sin(self.anim_tick * 2.2) * 2.2
+            self._draw_sweat_drop(painter, right_cx + 33, drop_y, drop_scale)
 
         # 4. Boca Expressiva Eilik / BMO
         mouth_cx = 148.0 + gx * 0.45
@@ -399,62 +565,41 @@ class FaceCanvas296x240(QWidget):
 
         painter.restore()
 
-        # 4b. Mini-Widget Holográfico na Direita (quando ativo)
-        WidgetsOverlayRenderer.draw_holographic_card(
-            painter,
-            self.active_widget,
-            self.tasks_cache,
-            self.pomodoro_state,
-            split,
-            self.anim_tick
-        )
-
-        # 5. Partículas Flutuantes
+        # 5. Partículas Flutuantes (sempre ATRÁS dos cards para não poluir a leitura)
         self._draw_particles(painter)
 
-        # 6. Barra Inferior de Legenda
-        painter.setPen(QPen(QColor(38, 54, 78), 1))
-        painter.drawLine(14, 194, self.LOGICAL_W - 14, 194)
+        # 6. Modo Híbrido v2: Card de Tela Cheia (com fade suave) OU Pílula Superior Condicional
+        overlay_alpha = max(0.0, min(1.0, self.sp_overlay_alpha.val))
+        effective_widget = self.active_widget
+        if self.alarm_ringing:
+            effective_widget = {"type": "ALARM_RING", **self.active_widget}
+        elif self.desk_clock_active:
+            effective_widget = {"type": "DESK_CLOCK"}
 
-        painter.setFont(QFont("Segoe UI", 8))
-        painter.setPen(QColor(225, 238, 255))
-        painter.drawText(QRectF(12, 197, self.LOGICAL_W - 24, 36), Qt.AlignCenter | Qt.TextWordWrap, self.subtitle)
-
-    def _draw_cyborg_visor_frame(self, painter: QPainter, cx: float, cy: float, face_color: QColor, led_rgb: tuple):
-        """Desenha a cabeça/visor estilizado do Ciborgue para destacar o rosto do fundo da tela."""
-        head_rect = QRectF(cx - 118, cy - 78, 236, 152)
-        visor_rect = QRectF(cx - 110, cy - 71, 220, 138)
-
-        # Auriculares laterais iluminados com a cor do LED RGB
-        lr, lg, lb = led_rgb
-        ear_color = QColor(lr, lg, lb, 210)
-        painter.setPen(QPen(QColor(110, 155, 205), 1.5))
-        painter.setBrush(QBrush(ear_color))
-        painter.drawRoundedRect(QRectF(head_rect.left() - 6, cy - 26, 10, 52), 4, 4)
-        painter.drawRoundedRect(QRectF(head_rect.right() - 4, cy - 26, 10, 52), 4, 4)
-
-        # Moldura metálica Prata-Gelo / Branco Pérola da cabeça (estilo Eilik / Astro Bot / EVE)
-        shell_grad = QLinearGradient(head_rect.topLeft(), head_rect.bottomRight())
-        shell_grad.setColorAt(0.0, QColor(238, 244, 252))
-        shell_grad.setColorAt(0.55, QColor(198, 212, 230))
-        shell_grad.setColorAt(1.0, QColor(142, 162, 188))
-        painter.setPen(QPen(QColor(face_color.red(), face_color.green(), face_color.blue(), 210), 2.2))
-        painter.setBrush(QBrush(shell_grad))
-        painter.drawRoundedRect(head_rect, 38, 38)
-
-        # Visor interno Azul-Cibernético profundo (destaca do fundo escuro externo)
-        visor_grad = QRadialGradient(QPointF(cx, cy - 10), 130)
-        visor_grad.setColorAt(0.0, QColor(28, 52, 88))
-        visor_grad.setColorAt(0.7, QColor(18, 34, 60))
-        visor_grad.setColorAt(1.0, QColor(12, 22, 42))
-        painter.setPen(QPen(QColor(56, 189, 248, 160), 1.6))
-        painter.setBrush(QBrush(visor_grad))
-        painter.drawRoundedRect(visor_rect, 31, 31)
-
-        # Reflexo de vidro sutil no topo do visor
-        shine_path = QPainterPath()
-        shine_path.addRoundedRect(QRectF(visor_rect.left() + 18, visor_rect.top() + 5, visor_rect.width() - 36, 12), 6, 6)
-        painter.fillPath(shine_path, QBrush(QColor(255, 255, 255, 34)))
+        if overlay_alpha > 0.02 and effective_widget:
+            rem_ratio = max(0.0, (self.widget_until_ts - time.time()) / max(1.0, self.widget_duration_sec))
+            WidgetsOverlayRenderer.draw_fullscreen_card(
+                painter,
+                effective_widget,
+                self.tasks_cache,
+                self.pomodoro_state,
+                self.timer_state,
+                self.personality_state,
+                self.weather_cache,
+                self.alarms_cache,
+                overlay_alpha,
+                rem_ratio,
+                self.anim_tick
+            )
+        else:
+            WidgetsOverlayRenderer.draw_top_pill(
+                painter,
+                self.pomodoro_state,
+                self.timer_state,
+                self.alarm_ringing,
+                self.telemetry,
+                self.anim_tick
+            )
 
     def _draw_blush_cheeks(self, painter: QPainter, lx: float, rx: float, cy: float, intensity: float = 1.0):
         """Desenha bochechas rosadas vibrantes e suaves estilo Eilik/BMO."""
@@ -520,6 +665,101 @@ class FaceCanvas296x240(QWidget):
                 cut_path.lineTo(rect.left() - 6, rect.top() + h * 0.06)
             cut_path.closeSubpath()
             eye_path = eye_path.subtracted(cut_path)
+        elif self.emotion == "FEAR" and h > 18:
+            cut_path = QPainterPath()
+            if is_left:
+                cut_path.moveTo(rect.left() - 6, rect.top() - 6)
+                cut_path.lineTo(rect.left() + w * 0.58, rect.top() - 6)
+                cut_path.lineTo(rect.left() - 6, rect.top() + h * 0.30)
+            else:
+                cut_path.moveTo(rect.right() + 6, rect.top() - 6)
+                cut_path.lineTo(rect.right() - w * 0.58, rect.top() - 6)
+                cut_path.lineTo(rect.right() + 6, rect.top() + h * 0.30)
+            cut_path.closeSubpath()
+            eye_path = eye_path.subtracted(cut_path)
+        elif self.emotion == "DISGUST" and h > 18:
+            top_cut = QPainterPath()
+            bot_cut = QPainterPath()
+            if is_left:
+                top_cut.moveTo(rect.left() - 6, rect.top() - 6)
+                top_cut.lineTo(rect.right() + 6, rect.top() - 6)
+                top_cut.lineTo(rect.right() + 6, rect.top() + h * 0.42)
+                top_cut.lineTo(rect.left() - 6, rect.top() + h * 0.12)
+                top_cut.closeSubpath()
+                bot_cut.moveTo(rect.left() - 6, rect.bottom() + 6)
+                bot_cut.lineTo(rect.right() + 6, rect.bottom() + 6)
+                bot_cut.lineTo(rect.right() + 6, rect.bottom() - h * 0.32)
+                bot_cut.lineTo(rect.left() - 6, rect.bottom() - h * 0.05)
+                bot_cut.closeSubpath()
+            else:
+                top_cut.moveTo(rect.left() - 6, rect.top() - 6)
+                top_cut.lineTo(rect.right() + 6, rect.top() - 6)
+                top_cut.lineTo(rect.right() + 6, rect.top() + h * 0.16)
+                top_cut.lineTo(rect.left() - 6, rect.top() + h * 0.42)
+                top_cut.closeSubpath()
+                bot_cut.moveTo(rect.left() - 6, rect.bottom() + 6)
+                bot_cut.lineTo(rect.right() + 6, rect.bottom() + 6)
+                bot_cut.lineTo(rect.right() + 6, rect.bottom() - h * 0.04)
+                bot_cut.lineTo(rect.left() - 6, rect.bottom() - h * 0.24)
+                bot_cut.closeSubpath()
+            eye_path = eye_path.subtracted(top_cut).subtracted(bot_cut)
+        elif self.emotion == "CONTEMPT" and h > 18:
+            cut_path = QPainterPath()
+            if is_left:
+                cut_path.addRect(QRectF(rect.left() - 6, rect.top() - 6, w + 12, h * 0.48 + 6))
+            else:
+                cut_path.moveTo(rect.left() - 6, rect.top() - 6)
+                cut_path.lineTo(rect.right() + 6, rect.top() - 6)
+                cut_path.lineTo(rect.right() + 6, rect.top() + h * 0.18)
+                cut_path.lineTo(rect.left() - 6, rect.top() + h * 0.44)
+                cut_path.closeSubpath()
+            eye_path = eye_path.subtracted(cut_path)
+        elif self.emotion == "SHAME" and h > 18:
+            cut_path = QPainterPath()
+            if is_left:
+                cut_path.moveTo(rect.left() - 6, rect.top() - 6)
+                cut_path.lineTo(rect.right() + 6, rect.top() - 6)
+                cut_path.lineTo(rect.right() + 6, rect.top() + h * 0.06)
+                cut_path.lineTo(rect.left() - 6, rect.top() + h * 0.28)
+            else:
+                cut_path.moveTo(rect.left() - 6, rect.top() - 6)
+                cut_path.lineTo(rect.right() + 6, rect.top() - 6)
+                cut_path.lineTo(rect.right() + 6, rect.top() + h * 0.28)
+                cut_path.lineTo(rect.left() - 6, rect.top() + h * 0.06)
+            cut_path.closeSubpath()
+            bot_cut = QPainterPath()
+            bot_cut.addRect(QRectF(rect.left() - 6, rect.bottom() - h * 0.10, w + 12, h * 0.12 + 6))
+            eye_path = eye_path.subtracted(cut_path).subtracted(bot_cut)
+        elif self.emotion == "DESPAIR" and h > 18:
+            cut_path = QPainterPath()
+            if is_left:
+                cut_path.moveTo(rect.left() - 6, rect.top() - 6)
+                cut_path.lineTo(rect.right() + 6, rect.top() - 6)
+                cut_path.lineTo(rect.right() + 6, rect.top() + h * 0.04)
+                cut_path.lineTo(rect.left() - 6, rect.top() + h * 0.52)
+            else:
+                cut_path.moveTo(rect.left() - 6, rect.top() - 6)
+                cut_path.lineTo(rect.right() + 6, rect.top() - 6)
+                cut_path.lineTo(rect.right() + 6, rect.top() + h * 0.52)
+                cut_path.lineTo(rect.left() - 6, rect.top() + h * 0.04)
+            cut_path.closeSubpath()
+            eye_path = eye_path.subtracted(cut_path)
+        elif self.emotion == "MALICE" and h > 18:
+            top_cut = QPainterPath()
+            if is_left:
+                top_cut.moveTo(rect.left() - 6, rect.top() - 6)
+                top_cut.lineTo(rect.right() + 6, rect.top() - 6)
+                top_cut.lineTo(rect.right() + 6, rect.top() + h * 0.44)
+                top_cut.lineTo(rect.left() - 6, rect.top() + h * 0.08)
+            else:
+                top_cut.moveTo(rect.left() - 6, rect.top() - 6)
+                top_cut.lineTo(rect.right() + 6, rect.top() - 6)
+                top_cut.lineTo(rect.right() + 6, rect.top() + h * 0.08)
+                top_cut.lineTo(rect.left() - 6, rect.top() + h * 0.44)
+            top_cut.closeSubpath()
+            bot_cut = QPainterPath()
+            bot_cut.addEllipse(QRectF(cx - w * 0.68, cy + h * 0.24, w * 1.36, h * 0.90))
+            eye_path = eye_path.subtracted(top_cut).subtracted(bot_cut)
 
         # Halo neon externo suave
         painter.setPen(QPen(QColor(color.red(), color.green(), color.blue(), 65), 4.0))
@@ -549,7 +789,48 @@ class FaceCanvas296x240(QWidget):
             if self.emotion == "LOVE" and h > 24:
                 s = 11.0 + 2.0 * math.sin(self.anim_tick * 2.5)
                 self._draw_heart_shape(painter, cx, cy + 2, s, QColor(255, 240, 248, 240))
+            elif self.emotion == "FEAR" and h > 24:
+                jitter = math.sin(self.anim_tick * 5.0) * 1.4
+                px, py = cx + shift_x + jitter + 2.0, cy + 7.0 + shift_y
+                painter.setPen(Qt.NoPen)
+                painter.setBrush(QBrush(QColor(12, 22, 42, 242)))
+                painter.drawEllipse(QPointF(px, py), 7.5, 7.5)
+                painter.setBrush(QBrush(QColor(255, 255, 255, 235)))
+                painter.drawEllipse(QPointF(px - 2.4, py - 2.4), 2.3, 2.3)
+            elif self.emotion == "SHAME" and h > 22:
+                painter.setPen(Qt.NoPen)
+                painter.setBrush(QBrush(QColor(255, 240, 248, 220)))
+                painter.drawEllipse(QPointF(cx - w * 0.12 + shift_x, cy + h * 0.18 + shift_y), w * 0.17, h * 0.10)
+            elif self.emotion == "DESPAIR" and h > 24:
+                ring_pulse = 1.0 + 0.08 * math.sin(self.anim_tick * 3.5)
+                painter.setBrush(Qt.NoBrush)
+                for rr, lw in ((7.0, 2.2), (14.5, 2.0), (22.0, 1.8)):
+                    painter.setPen(QPen(QColor(18, 24, 58, 210), lw))
+                    painter.drawEllipse(QPointF(cx + shift_x * 0.5, cy + 5), rr * ring_pulse, rr * 0.92 * ring_pulse)
+                painter.setPen(Qt.NoPen)
+                painter.setBrush(QBrush(QColor(175, 225, 255, 195)))
+                painter.drawEllipse(QPointF(cx, cy + h * 0.30), w * 0.24, h * 0.08)
+            elif self.emotion == "MALICE" and h > 20:
+                painter.setPen(Qt.NoPen)
+                painter.setBrush(QBrush(QColor(255, 220, 255, 210)))
+                painter.drawEllipse(QPointF(cx + shift_x + (4.0 if is_left else -4.0), cy + 2), 4.5, h * 0.22)
             painter.restore()
+
+    def _draw_sweat_drop(self, painter: QPainter, cx: float, cy: float, scale: float = 1.0):
+        painter.save()
+        painter.translate(cx, cy)
+        painter.scale(scale, scale)
+        drop = QPainterPath()
+        drop.moveTo(0, -10)
+        drop.cubicTo(6, -1, 7, 6, 0, 9)
+        drop.cubicTo(-7, 6, -6, -1, 0, -10)
+        painter.setPen(QPen(QColor(210, 245, 255, 220), 1.3))
+        painter.setBrush(QBrush(QColor(95, 215, 255, 195)))
+        painter.drawPath(drop)
+        painter.setPen(Qt.NoPen)
+        painter.setBrush(QBrush(QColor(255, 255, 255, 220)))
+        painter.drawEllipse(QPointF(-1.5, 2.0), 1.4, 2.4)
+        painter.restore()
 
     def _draw_heart_shape(self, painter: QPainter, cx: float, cy: float, size: float, color: QColor):
         path = QPainterPath()
@@ -679,6 +960,108 @@ class FaceCanvas296x240(QWidget):
             painter.setBrush(QBrush(mouth_inner_bg))
             painter.drawEllipse(QPointF(cx, cy + 2), r, r)
 
+        elif self.emotion == "FEAR":
+            mw, mh = 38.0, 15.0
+            jitter_y = math.sin(self.anim_tick * 6.0) * 1.1
+            m_rect = QRectF(cx - mw / 2, cy - mh / 2 + 2 + jitter_y, mw, mh)
+            m_clip = QPainterPath()
+            m_clip.addRoundedRect(m_rect, 7.0, 7.0)
+            painter.save()
+            painter.setClipPath(m_clip)
+            painter.fillPath(m_clip, QBrush(mouth_inner_bg))
+            painter.setPen(Qt.NoPen)
+            painter.setBrush(QBrush(teeth_color))
+            painter.drawRect(QRectF(cx - mw * 0.45, m_rect.top(), mw * 0.90, mh * 0.42))
+            painter.drawRect(QRectF(cx - mw * 0.45, m_rect.bottom() - mh * 0.42, mw * 0.90, mh * 0.42))
+            painter.setPen(QPen(mouth_inner_bg, 1.3))
+            for tx in (-9.0, 0.0, 9.0):
+                painter.drawLine(QPointF(cx + tx, m_rect.top()), QPointF(cx + tx, m_rect.bottom()))
+            painter.restore()
+            painter.setPen(QPen(color, 2.6))
+            painter.setBrush(Qt.NoBrush)
+            painter.drawPath(m_clip)
+
+        elif self.emotion == "DISGUST":
+            path = QPainterPath()
+            path.moveTo(cx - 22, cy + 4)
+            path.cubicTo(cx - 10, cy - 9, cx - 2, cy - 7, cx + 2, cy + 1)
+            path.cubicTo(cx + 8, cy + 9, cx + 16, cy + 8, cx + 23, cy - 3)
+            painter.setPen(QPen(color, 3.2, Qt.SolidLine, Qt.RoundCap))
+            painter.setBrush(Qt.NoBrush)
+            painter.drawPath(path)
+
+            tongue = QPainterPath()
+            tongue.moveTo(cx + 3, cy + 2)
+            tongue.cubicTo(cx + 3, cy + 15, cx + 16, cy + 16, cx + 17, cy + 1)
+            tongue.closeSubpath()
+            painter.setPen(QPen(color, 1.8))
+            painter.setBrush(QBrush(tongue_color))
+            painter.drawPath(tongue)
+            painter.setPen(QPen(mouth_inner_bg, 1.3, Qt.SolidLine, Qt.RoundCap))
+            painter.drawLine(QPointF(cx + 10, cy + 4), QPointF(cx + 10, cy + 10))
+
+        elif self.emotion == "CONTEMPT":
+            path = QPainterPath()
+            path.moveTo(cx - 19, cy + 4)
+            path.lineTo(cx + 2, cy + 4)
+            path.quadTo(cx + 14, cy + 4, cx + 21, cy - 5)
+            painter.setPen(QPen(color, 3.3, Qt.SolidLine, Qt.RoundCap))
+            painter.setBrush(Qt.NoBrush)
+            painter.drawPath(path)
+            painter.setPen(QPen(color, 2.2, Qt.SolidLine, Qt.RoundCap))
+            painter.drawLine(QPointF(cx + 19, cy - 7), QPointF(cx + 24, cy - 3))
+
+        elif self.emotion == "SHAME":
+            path = QPainterPath()
+            path.moveTo(cx - 12, cy + 1)
+            path.quadTo(cx - 6, cy + 7, cx, cy + 1)
+            path.quadTo(cx + 6, cy + 7, cx + 12, cy + 1)
+            painter.setPen(QPen(color, 2.8, Qt.SolidLine, Qt.RoundCap))
+            painter.setBrush(Qt.NoBrush)
+            painter.drawPath(path)
+
+        elif self.emotion == "DESPAIR":
+            jitter_y = math.sin(self.anim_tick * 5.5) * 1.0
+            cy_d = cy + jitter_y
+            path = QPainterPath()
+            path.moveTo(cx - 21, cy_d + 13)
+            path.cubicTo(cx - 14, cy_d - 14, cx + 14, cy_d - 14, cx + 21, cy_d + 13)
+            path.cubicTo(cx + 10, cy_d + 5, cx - 10, cy_d + 5, cx - 21, cy_d + 13)
+            path.closeSubpath()
+            painter.save()
+            painter.setClipPath(path)
+            painter.fillPath(path, QBrush(mouth_inner_bg))
+            painter.setPen(Qt.NoPen)
+            painter.setBrush(QBrush(tongue_color))
+            painter.drawEllipse(QPointF(cx, cy_d + 8), 11, 6)
+            painter.restore()
+            painter.setPen(QPen(color, 2.6, Qt.SolidLine, Qt.RoundCap, Qt.RoundJoin))
+            painter.setBrush(Qt.NoBrush)
+            painter.drawPath(path)
+
+        elif self.emotion == "MALICE":
+            path = QPainterPath()
+            path.moveTo(cx - 23, cy - 2)
+            path.quadTo(cx + 4, cy - 2, cx + 25, cy - 7)
+            path.quadTo(cx + 12, cy + 18, cx - 23, cy - 2)
+            path.closeSubpath()
+
+            painter.save()
+            painter.setClipPath(path)
+            painter.fillPath(path, QBrush(mouth_inner_bg))
+            painter.setPen(Qt.NoPen)
+            painter.setBrush(QBrush(teeth_color))
+            fang = QPainterPath()
+            fang.moveTo(cx + 10, cy - 6)
+            fang.lineTo(cx + 17, cy - 6)
+            fang.lineTo(cx + 14, cy + 2)
+            fang.closeSubpath()
+            painter.drawPath(fang)
+            painter.restore()
+            painter.setPen(QPen(color, 2.6, Qt.SolidLine, Qt.RoundCap, Qt.RoundJoin))
+            painter.setBrush(Qt.NoBrush)
+            painter.drawPath(path)
+
         else:
             painter.setPen(QPen(color, 3.4, Qt.SolidLine, Qt.RoundCap))
             painter.setBrush(Qt.NoBrush)
@@ -711,3 +1094,15 @@ class FaceCanvas296x240(QWidget):
                 painter.setPen(Qt.NoPen)
                 painter.setBrush(QBrush(QColor(200, 120, 255, alpha)))
                 painter.drawEllipse(QPointF(px, py), sz * 0.5, sz * 0.5)
+            elif ptype == "sweat":
+                painter.setPen(QPen(QColor(210, 245, 255, alpha), 1.0))
+                painter.setBrush(QBrush(QColor(110, 215, 255, alpha)))
+                painter.drawEllipse(QPointF(px, py), sz * 0.36, sz * 0.62)
+            elif ptype == "nausea":
+                painter.setPen(QPen(QColor(175, 255, 95, alpha), 1.3))
+                painter.setBrush(QBrush(QColor(125, 220, 55, int(alpha * 0.55))))
+                painter.drawEllipse(QPointF(px, py), sz * 0.52, sz * 0.52)
+            elif ptype == "spark":
+                painter.setPen(QPen(QColor(235, 160, 255, alpha), 1.6, Qt.SolidLine, Qt.RoundCap))
+                painter.drawLine(QPointF(px - sz * 0.7, py), QPointF(px + sz * 0.7, py))
+                painter.drawLine(QPointF(px, py - sz * 0.7), QPointF(px, py + sz * 0.7))

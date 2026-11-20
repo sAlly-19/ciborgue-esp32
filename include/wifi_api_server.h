@@ -133,6 +133,16 @@ private:
     String buildStatusJson() {
         JsonDocument doc;
         doc["ok"]          = true;
+        doc["api_revision"] = 3;
+        JsonObject capabilities = doc["capabilities"].to<JsonObject>();
+        capabilities["display"] = display.isPhysicalDisplayReady();
+        capabilities["lip_sync"] = true;
+        capabilities["memory_proposals"] = true;
+        if (display.isPhysicalDisplayReady()) writeDisplayState(doc["display"].to<JsonObject>());
+        JsonArray emotions = capabilities["emotions"].to<JsonArray>();
+        for (int i = EMO_NEUTRAL; i <= EMO_LIAR; ++i) {
+            emotions.add(emotionToString(static_cast<FaceEmotion>(i)));
+        }
         doc["device"]      = "Ciborgue ESP32-S3 (N16R8)";
         doc["hostname"]    = "ciborgue.local";
         doc["state"]       = stateToString(currentState);
@@ -175,6 +185,7 @@ private:
         doc["sfx_mute"]      = nvs.isSfxMuted();
         doc["sfx_idle"]      = nvs.isSfxIdleEnabled();
         doc["fast_path"]     = nvs.isFastPathEnabled();
+        doc["tft_brightness"] = nvs.getTftBrightness();
 
         const PetState& ps = personality.getState();
         doc["desk_clock"]    = display.isDeskClockActive();
@@ -188,6 +199,26 @@ private:
         String out;
         serializeJson(doc, out);
         return out;
+    }
+
+    void writeDisplayState(JsonObject response) {
+        response["rotation"] = display.getRotation();
+        response["inverted"] = display.isInverted();
+        response["brightness"] = display.getBrightness();
+    }
+
+    void sendDisplayState() {
+        if (!display.isPhysicalDisplayReady()) {
+            server.send(503, "application/json", "{\"ok\":false,\"error\":\"Tela indisponivel\"}");
+            return;
+        }
+        JsonDocument doc;
+        JsonObject response = doc.to<JsonObject>();
+        response["ok"] = true;
+        writeDisplayState(response);
+        String out;
+        serializeJson(doc, out);
+        server.send(200, "application/json", out);
     }
 
     void setupRoutes() {
@@ -222,6 +253,37 @@ private:
             server.send(200, "application/json", buildStatusJson());
         });
 
+        server.on("/api/display", HTTP_GET, [this]() {
+            addCorsHeaders();
+            sendDisplayState();
+        });
+
+        server.on("/api/display", HTTP_POST, [this]() {
+            addCorsHeaders();
+            JsonDocument req;
+            const auto invalidJson = deserializeJson(req, server.arg("plain"));
+            JsonVariantConst rotation = req["rotation"];
+            JsonVariantConst brightness = req["brightness"];
+            JsonVariantConst inverted = req["inverted"];
+            const bool hasRotation = req.as<JsonObject>().containsKey("rotation");
+            const bool hasBrightness = req.as<JsonObject>().containsKey("brightness");
+            const bool hasInverted = req.as<JsonObject>().containsKey("inverted");
+            if (invalidJson || (!hasRotation && !hasBrightness && !hasInverted) ||
+                (hasRotation && (!rotation.is<int>() || rotation.as<int>() < 0 || rotation.as<int>() > 3)) ||
+                (hasBrightness && !brightness.is<uint8_t>()) ||
+                (hasInverted && !inverted.is<bool>())) {
+                server.send(400, "application/json", "{\"ok\":false,\"error\":\"Ajuste de tela invalido\"}");
+                return;
+            }
+            if (display.isPhysicalDisplayReady()) {
+                power.registerActivity();
+                if (hasRotation) display.setRotation(rotation.as<uint8_t>());
+                if (hasInverted) display.setInvert(inverted.as<bool>());
+                if (hasBrightness) power.setDisplayBrightness(brightness.as<uint8_t>());
+            }
+            sendDisplayState();
+        });
+
         server.on("/api/chat", HTTP_POST, [this]() {
             addCorsHeaders();
             power.registerActivity();
@@ -253,6 +315,7 @@ private:
             JsonDocument res;
             res["ok"]      = true;
             res["reply"]   = reply;
+            memory.appendConversationProposal(res, reply);
             res["state"]   = stateToString(currentState);
             res["emotion"] = emotionToString(currentEmotion);
             res["led_r"]   = led.getR();
@@ -261,6 +324,27 @@ private:
 
             String out;
             serializeJson(res, out);
+            server.send(200, "application/json", out);
+        });
+
+        server.on("/api/memory_proposal", HTTP_POST, [this]() {
+            addCorsHeaders();
+            JsonDocument req;
+            const auto invalidJson = deserializeJson(req, server.arg("plain"));
+            const String id = req["id"] | "";
+            const String action = req["action"] | "";
+            if (invalidJson || id.isEmpty() || (action != "keep" && action != "dismiss")) {
+                server.send(400, "application/json", "{\"ok\":false,\"error\":\"Proposta invalida\"}");
+                return;
+            }
+            String message;
+            const bool resolved = memory.resolveConversationProposal(id, action == "keep", message);
+            JsonDocument response;
+            response["ok"] = true;
+            response["resolved"] = resolved;
+            response["message"] = message;
+            String out;
+            serializeJson(response, out);
             server.send(200, "application/json", out);
         });
 
@@ -281,7 +365,8 @@ private:
             JsonDocument req;
             deserializeJson(req, server.arg("plain"));
             String st = req["state"] | "IDLE";
-            setRobotState(stringToState(st));
+            st.trim();
+            setRobotState(st.equalsIgnoreCase("BOOT") ? STATE_BOOT : stringToState(st));
             sendTelemetryPacket();
             server.send(200, "application/json", buildStatusJson());
         });
@@ -306,7 +391,8 @@ private:
                 if (modeStr == "PULSE" || modeStr == "PULSAR") mode = LED_MODE_PULSE;
                 else if (modeStr == "RAINBOW" || modeStr == "ARCO_IRIS") mode = LED_MODE_RAINBOW;
                 else if (modeStr == "ALERT" || modeStr == "ALERTA") mode = LED_MODE_ALERT;
-                led.setCustomColor((uint8_t)r, (uint8_t)g, (uint8_t)b, mode);
+                if (modeStr == "STATE") led.setStateMode();
+                else led.setCustomColor((uint8_t)r, (uint8_t)g, (uint8_t)b, mode);
             }
             sendTelemetryPacket();
             server.send(200, "application/json", buildStatusJson());
@@ -360,7 +446,11 @@ private:
             deserializeJson(req, server.arg("plain"));
             String action = req["action"] | "adicionar";
             String fact = req["fact"] | req["fato"] | "";
-            tools.toolSalvarMemoria(action, fact);
+            if (action.equalsIgnoreCase("remover")) {
+                memory.removeMemoryByFact(fact);
+            } else {
+                tools.toolSalvarMemoria(action, fact);
+            }
             server.send(200, "application/json", memory.getMemoriesJson());
         });
 
@@ -423,6 +513,9 @@ private:
             }
             if (req["fast_path"].is<bool>()) {
                 nvs.saveFastPathEnabled(req["fast_path"].as<bool>());
+            }
+            if (req["tft_brightness"].is<uint8_t>()) {
+                power.setDisplayBrightness(req["tft_brightness"].as<uint8_t>());
             }
             power.registerActivity();
             sendTelemetryPacket();

@@ -66,7 +66,14 @@ enum FaceEmotion {
     EMO_CONTEMPT,   // Olhar lateral e pálpebra caída de desprezo
     EMO_SHAME,      // Olhos encabulados + rubor de vergonha
     EMO_DESPAIR,    // Espirais de agonia e lágrimas de desespero
-    EMO_MALICE      // Meia-lua inclinada e sorriso de malícia
+    EMO_MALICE,
+    EMO_CURIOUS,
+    EMO_BORED,
+    EMO_SILENT,
+    EMO_ANGEL,
+    EMO_COOL,
+    EMO_CRAZY,
+    EMO_LIAR
 };
 
 enum LedEffectMode {
@@ -198,6 +205,13 @@ inline const char* emotionToString(FaceEmotion e) {
         case EMO_SHAME:     return "SHAME";
         case EMO_DESPAIR:   return "DESPAIR";
         case EMO_MALICE:    return "MALICE";
+        case EMO_CURIOUS: return "CURIOUS";
+        case EMO_BORED: return "BORED";
+        case EMO_SILENT: return "SILENT";
+        case EMO_ANGEL: return "ANGEL";
+        case EMO_COOL: return "COOL";
+        case EMO_CRAZY: return "CRAZY";
+        case EMO_LIAR: return "LIAR";
         default:            return "NEUTRAL";
     }
 }
@@ -218,6 +232,13 @@ inline FaceEmotion stringToEmotion(String e) {
     if (e == "shame" || e == "vergonha" || e == "envergonhado" || e == "envergonhada" || e == "timido" || e == "tímido" || e == "shy" || e == "corado") return EMO_SHAME;
     if (e == "despair" || e == "desespero" || e == "desesperado" || e == "desesperada" || e == "panico" || e == "pânico" || e == "aflito") return EMO_DESPAIR;
     if (e == "malice" || e == "malicia" || e == "malícia" || e == "malicioso" || e == "maliciosa" || e == "travesso" || e == "sapeca" || e == "mischief") return EMO_MALICE;
+    if (e == "curious" || e == "curioso") return EMO_CURIOUS;
+    if (e == "bored" || e == "tedio" || e == "t\u00e9dio") return EMO_BORED;
+    if (e == "silent" || e == "silencio" || e == "sil\u00eancio") return EMO_SILENT;
+    if (e == "angel" || e == "anjinho") return EMO_ANGEL;
+    if (e == "cool" || e == "chavoso") return EMO_COOL;
+    if (e == "crazy" || e == "louco") return EMO_CRAZY;
+    if (e == "liar" || e == "mentiroso") return EMO_LIAR;
     return EMO_NEUTRAL;
 }
 

@@ -87,6 +87,8 @@ class SerialBridgeManager:
         self.wifi_ip = None
         self.http_session = requests.Session()
         self.lock = threading.Lock()
+        self.lipsync_lock = threading.Lock()
+        self.latest_lipsync = None
         self.running = True
         self.provisioned_once = False
         self.last_wifi_reply = None
@@ -121,6 +123,20 @@ class SerialBridgeManager:
                     self.ser.close()
                 except Exception:
                     pass
+
+    def queue_lipsync(self, amp: float, zcr: float):
+        # Runs on the audio thread. Keep only the most recent sample.
+        with self.lipsync_lock:
+            self.latest_lipsync = (time.monotonic(), amp, zcr)
+
+    def _send_latest_lipsync(self):
+        with self.lipsync_lock:
+            sample, self.latest_lipsync = self.latest_lipsync, None
+        if sample is None or time.monotonic() - sample[0] > 0.10:
+            return
+        _, amp, zcr = sample
+        with self.lock:
+            self.ser.write(f"CMD:LIPSYNC={amp:.3f},{zcr:.3f}\n".encode("ascii"))
 
     def send_cmd(self, cmd: str):
         cmd = cmd.strip()
@@ -163,6 +179,13 @@ class SerialBridgeManager:
                         self.last_wifi_reply = reply
                         self.signals.say_requested.emit(reply)
                     self._sync_wifi_tasks_and_memories(ip)
+            elif cmd.startswith("CMD:TFT_BRI="):
+                brightness = int(cmd.split("=", 1)[1])
+                r = self.http_session.post(
+                    f"{base_url}/api/config", json={"tft_brightness": brightness}, timeout=5
+                )
+                r.raise_for_status()
+                self._apply_wifi_status_dict(r.json(), speak_on_new_reply=False)
             else:
                 r = self.http_session.post(
                     f"{base_url}/api/command",
@@ -293,6 +316,7 @@ class SerialBridgeManager:
         preferred_port = os.getenv("SERIAL_PORT", "AUTO")
         baud = int(os.getenv("BAUD_RATE", "115200"))
 
+        next_lipsync = 0.0
         while self.running:
             # 1. Prioridade 1: Verifica se o cabo USB Serial está conectado
             usb_port = find_esp32_serial_port(preferred_port)
@@ -303,6 +327,7 @@ class SerialBridgeManager:
                         s.port = usb_port
                         s.baudrate = baud
                         s.timeout = 0.2
+                        s.write_timeout = 0.05
                         s.dtr = False
                         s.rts = False
                         s.open()
@@ -328,12 +353,16 @@ class SerialBridgeManager:
 
                 if self.ser and self.ser.is_open:
                     try:
+                        now = time.monotonic()
+                        if now >= next_lipsync:
+                            next_lipsync = now + 0.020
+                            self._send_latest_lipsync()
                         if self.ser.in_waiting > 0:
                             raw = self.ser.readline().decode("utf-8", errors="ignore").strip()
                             if raw:
                                 self._handle_line(raw)
                         else:
-                            time.sleep(0.015)
+                            time.sleep(0.005)
                         continue
                     except Exception:
                         try:

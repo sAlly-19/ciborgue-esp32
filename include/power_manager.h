@@ -117,11 +117,17 @@ public:
 
     PowerStage getStage() const { return stage; }
 
+    void setDisplayBrightness(uint8_t level) {
+        nvs.saveTftBrightness(level);
+        if (stage == PWR_AWAKE) display.setBrightness(level);
+        else if (stage == PWR_ECO_SLEEPY) display.setBrightness(min(uint8_t{35}, level));
+    }
+
     void registerActivity() {
         lastActivityMillis = millis();
         if (stage == PWR_ECO_SLEEPY) {
             stage = PWR_AWAKE;
-            display.setBrightness(TFT_AWAKE_BRIGHTNESS);
+            display.setBrightness(nvs.getTftBrightness());
             led.setBrightnessScale(1.0f);
             WiFi.setSleep(false);
             setRobotEmotion(EMO_NEUTRAL);
@@ -136,7 +142,7 @@ public:
         stage = PWR_ECO_SLEEPY;
         setRobotEmotion(EMO_SLEEPY);
         display.setSubtitle("Modo Eco (Sonolento)...");
-        display.setBrightness(35);
+        display.setBrightness(min(uint8_t{35}, nvs.getTftBrightness()));
         led.setBrightnessScale(0.22f);
         if (nvs.isWifiConnected()) {
             WiFi.setSleep(true);
@@ -208,7 +214,7 @@ public:
 
         stage = PWR_AWAKE;
         lastActivityMillis = millis();
-        display.setBrightness(TFT_AWAKE_BRIGHTNESS);
+        display.setBrightness(nvs.getTftBrightness());
         led.setBrightnessScale(1.0f);
         animPaused = false;
         personality.onRested();

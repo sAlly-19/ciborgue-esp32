@@ -33,14 +33,6 @@ private:
     TaskHandle_t  sfxTaskHandle = nullptr;
     volatile bool busy          = false;
 
-    unsigned long nextIdleChirpAt = 0;
-
-    void scheduleNextIdleChirp() {
-        unsigned long span = SFX_IDLE_MAX_MS - SFX_IDLE_MIN_MS;
-        unsigned long offset = (span > 0) ? (unsigned long)(esp_random() % span) : 0;
-        nextIdleChirpAt = millis() + SFX_IDLE_MIN_MS + offset;
-    }
-
     void renderChirp(float f0, float f1, float durSec, float vibHz, float vibDepth, float gain) {
 #if ENABLE_PHYSICAL_AUDIO
         const int sampleRate = SFX_SAMPLE_RATE;
@@ -332,15 +324,13 @@ public:
 
     void begin() {
         sfxQueue = xQueueCreate(6, sizeof(SfxRequest));
-        scheduleNextIdleChirp();
         xTaskCreatePinnedToCore(sfxTaskEntry, "SfxTask", 4096, this, 2, &sfxTaskHandle, 0);
     }
 
-    void play(SfxKind kind, float gainScale = 1.0f) {
-        if (!sfxQueue) return;
-        if (nvs.isSfxMuted() || nvs.getSfxVolume() == 0) return;
+    bool play(SfxKind kind, float gainScale = 1.0f) {
+        if (!sfxQueue || nvs.isSfxMuted() || nvs.getSfxVolume() == 0) return false;
         SfxRequest req{kind, gainScale};
-        xQueueSend(sfxQueue, &req, 0);
+        return xQueueSend(sfxQueue, &req, 0) == pdPASS;
     }
 
     void waitIdle(uint32_t maxMs) {
@@ -351,17 +341,12 @@ public:
         }
     }
 
-    void updateIdleChirp(RobotState state, PowerStage powerStage) {
-        if (!nvs.isSfxIdleEnabled() || nvs.isSfxMuted() || nvs.getSfxVolume() == 0) {
-            return;
-        }
-        if (state != STATE_IDLE || powerStage != PWR_AWAKE) {
-            return;
-        }
-        if ((long)(millis() - nextIdleChirpAt) >= 0) {
-            play(SFX_IDLE_CHIRP, 0.55f);
-            scheduleNextIdleChirp();
-        }
+    bool isBusy() const {
+        return busy || (sfxQueue && uxQueueMessagesWaiting(sfxQueue) > 0);
+    }
+
+    bool idleChirpEnabled() const {
+        return nvs.isSfxIdleEnabled() && !nvs.isSfxMuted() && nvs.getSfxVolume() > 0;
     }
 };
 

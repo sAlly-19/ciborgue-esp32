@@ -20,6 +20,7 @@
 #include "alarm_manager.h"
 
 extern void setDeskClockMode(bool active);
+extern void setRobotEmotion(FaceEmotion emotion);
 extern void cancelActiveTimer();
 
 class ToolsController {
@@ -107,25 +108,23 @@ public:
         display.syncTasksSummary(titles, doneFlags, doneCnt, (int)all.size());
     }
 
-    String toolMudarExpressao(const String& emocaoStr) {
-        currentEmotion = stringToEmotion(emocaoStr);
-        display.setEmotion(currentEmotion);
-        Serial.printf("EVT:EMOTION=%s\n", emotionToString(currentEmotion));
+    String toolMudarExpressao(const String& emocaoStr, float gain = 1.0f) {
+        setRobotEmotion(stringToEmotion(emocaoStr));
 
         switch (currentEmotion) {
-            case EMO_HAPPY:     sfx.play(SFX_HAPPY); break;
-            case EMO_LOVE:      sfx.play(SFX_LOVE); break;
-            case EMO_SAD:       sfx.play(SFX_SAD); break;
-            case EMO_ANGRY:     sfx.play(SFX_ANGRY); break;
-            case EMO_SURPRISED: sfx.play(SFX_SURPRISED); break;
-            case EMO_WINK:      sfx.play(SFX_WINK); break;
-            case EMO_SLEEPY:    sfx.play(SFX_SLEEP, 0.7f); break;
-            case EMO_FEAR:      sfx.play(SFX_FEAR); break;
-            case EMO_DISGUST:   sfx.play(SFX_DISGUST); break;
-            case EMO_CONTEMPT:  sfx.play(SFX_CONTEMPT); break;
-            case EMO_SHAME:     sfx.play(SFX_SHAME); break;
-            case EMO_DESPAIR:   sfx.play(SFX_DESPAIR); break;
-            case EMO_MALICE:    sfx.play(SFX_MALICE); break;
+            case EMO_HAPPY:     sfx.play(SFX_HAPPY, gain); break;
+            case EMO_LOVE:      sfx.play(SFX_LOVE, gain); break;
+            case EMO_SAD:       sfx.play(SFX_SAD, gain); break;
+            case EMO_ANGRY:     sfx.play(SFX_ANGRY, gain); break;
+            case EMO_SURPRISED: sfx.play(SFX_SURPRISED, gain); break;
+            case EMO_WINK:      sfx.play(SFX_WINK, gain); break;
+            case EMO_SLEEPY:    sfx.play(SFX_SLEEP, gain * 0.7f); break;
+            case EMO_FEAR:      sfx.play(SFX_FEAR, gain); break;
+            case EMO_DISGUST:   sfx.play(SFX_DISGUST, gain); break;
+            case EMO_CONTEMPT:  sfx.play(SFX_CONTEMPT, gain); break;
+            case EMO_SHAME:     sfx.play(SFX_SHAME, gain); break;
+            case EMO_DESPAIR:   sfx.play(SFX_DESPAIR, gain); break;
+            case EMO_MALICE:    sfx.play(SFX_MALICE, gain); break;
             default:            break;
         }
         return String("Expressão do rosto alterada para ") + emotionToString(currentEmotion) + ".";
@@ -631,12 +630,12 @@ public:
         {
             JsonObject fn = decls.add<JsonObject>();
             fn["name"] = "salvar_memoria_usuario";
-            fn["description"] = "Grava permanentemente na Flash NVS um fato importante sobre o usuário (nome, preferências, datas de provas, notas) para lembrar no futuro.";
+            fn["description"] = "Propoe uma memoria curta sobre um fato ou habito declarado pelo usuario. Aguarda confirmacao local.";
             JsonObject params = fn["parameters"].to<JsonObject>();
             params["type"] = "OBJECT";
             JsonObject props = params["properties"].to<JsonObject>();
             props["acao"]["type"] = "STRING";
-            props["acao"]["description"] = "Ação: 'adicionar' ou 'limpar'.";
+            props["acao"]["description"] = "Use propor para oferecer o fato ao usuario.";
             props["fato"]["type"] = "STRING";
             props["fato"]["description"] = "O fato ou nota a ser guardado (ex: 'Prova de Redes na sexta-feira').";
             JsonArray req = params["required"].to<JsonArray>();

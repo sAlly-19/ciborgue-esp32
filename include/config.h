@@ -95,6 +95,9 @@
 #define WIDGET_DEFAULT_DURATION_MS   8000UL                  // Duração dos cards temporários (8s)
 
 #define PET_DECAY_INTERVAL_MS        (20UL * 60UL * 1000UL)  // Decaimento suave a cada 20 min ocioso
+#ifndef PET_REACTION_HOLD_MS
+#define PET_REACTION_HOLD_MS         5000UL  // Tempo da expressao apos a interacao, em ms.
+#endif
 #define PET_NVS_MIN_SAVE_MS          (5UL * 60UL * 1000UL)   // Intervalo mínimo de escrita na Flash NVS
 #define PET_AUTONOMOUS_MIN_MS        180000UL                // 3 min entre micro-reações autônomas
 #define PET_AUTONOMOUS_MAX_MS        360000UL                // 6 min máximo

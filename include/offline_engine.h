@@ -369,15 +369,8 @@ public:
         }
 
         // 5. Memórias NVS
-        if (norm.indexOf("lembrar que") >= 0 || norm.indexOf("anotar que") >= 0 || norm.indexOf("guarde que") >= 0) {
-            String fact = userPrompt;
-            int idx = norm.indexOf(" que ");
-            if (idx >= 0 && (int)userPrompt.length() > idx + 5) {
-                fact = userPrompt.substring(idx + 5);
-            }
-            fact.trim();
-            return tools.toolSalvarMemoria("adicionar", fact);
-        }
+        String memoryReply;
+        if (memory.handleConversationMemory(userPrompt, memoryReply)) return memoryReply;
         if (norm.indexOf("esquecer memorias") >= 0 || norm.indexOf("limpar memorias") >= 0) {
             return tools.toolSalvarMemoria("limpar", "");
         }

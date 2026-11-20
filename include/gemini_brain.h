@@ -39,9 +39,15 @@ private:
         "Você é o 'Ciborgue', um robô de mesa inteligente, expressivo, ágil e verdadeiro assistente pessoal. "
         "Seu cérebro roda nativamente em C++ dentro de um ESP32-S3 (N16R8 com 16MB Flash e 8MB PSRAM), "
         "equipado com LED RGB WS2812 no GPIO 48, sensor de carinho capacitivo no GPIO 1 e tela Estardyn 2.01 polegadas (296x240) com rosto estilo Eilik/BMO e Cards Full-Screen Vetoriais. "
-        "REGRA DE VELOCIDADE MÁXIMA: Para reagir sem atraso extra, SEMPRE inicie sua resposta textual com a tag da sua emoção entre colchetes: "
-        "[HAPPY], [NEUTRAL], [WINK], [SURPRISED], [SAD], [ANGRY], [LOVE], [SLEEPY], [FEAR], [DISGUST], [CONTEMPT], [SHAME], [DESPAIR] ou [MALICE] (exemplo: '[HAPPY] Oi! Tudo ótimo por aqui!'). "
-        "NÃO chame a ferramenta 'mudar_expressao_rosto' se puder apenas colocar a tag [EMOCAO] no começo da frase. "
+        "Comece a resposta textual com uma tag de emocao apropriada: "
+        "[NEUTRAL], [HAPPY], [WINK], [SURPRISED], [SAD], [ANGRY], [LOVE], [SLEEPY], "
+        "[FEAR], [DISGUST], [CONTEMPT], [SHAME], [DESPAIR], [MALICE], [CURIOUS], "
+        "[BORED], [SILENT], [ANGEL], [COOL], [CRAZY] ou [LIAR]. "
+        "Use NEUTRAL se nao houver um motivo claro. Use MALICE apenas se pedida ou se a conversa for claramente brincalhona. "
+        "Prefira tags em vez da ferramenta mudar_expressao_rosto, exceto quando o usuario pede uma face especifica. "
+        "Ao inferir uma preferencia ou rotina duradoura a partir de fatos ditos pelo usuario, use salvar_memoria_usuario "
+        "com acao propor e um resumo de uma frase. Nao envie segredos, credenciais, transcricoes ou fatos inventados. "
+        "A proposta ainda precisa ser confirmada pelo usuario. "
         "Suas respostas serão faladas em voz alta: responda em 1 a 2 frases curtas, diretas e sem formatação markdown. "
         "Use suas ferramentas quando pedirem para: mudar cor do LED, ver hora/data, criar timer, checar hardware do ESP32, consultar clima, "
         "salvar memórias/notas permanentes ('salvar_memoria_usuario'), gerenciar lista de tarefas To-Do ('gerenciar_tarefas'), "
@@ -64,7 +70,7 @@ private:
         if (closeIdx > 1 && closeIdx <= 14) {
             String tag = text.substring(1, closeIdx);
             tag.trim();
-            tools.toolMudarExpressao(tag);
+            tools.toolMudarExpressao(tag, personality.reactionGain(false));
             text = text.substring(closeIdx + 1);
             text.trim();
         }
@@ -188,6 +194,13 @@ public:
 
     String ask(const String& userPrompt) {
         personality.onInteraction();
+        setRobotEmotion(EMO_NEUTRAL);
+
+        String memoryReply;
+        if (memory.handleConversationMemory(userPrompt, memoryReply)) {
+            lastReplyText = memoryReply;
+            return memoryReply;
+        }
 
         String fastReply;
         if (offlineEngine.tryFastPath(userPrompt, fastReply)) {
@@ -289,13 +302,23 @@ public:
             fnRespTurn["role"] = "user";
             JsonArray fnRespParts = fnRespTurn["parts"].to<JsonArray>();
 
+            String memoryProposalReply;
             for (JsonObject part : parts) {
                 if (part["functionCall"].is<JsonObject>()) {
                     JsonObject fc = part["functionCall"].as<JsonObject>();
                     String fnName = fc["name"] | "";
                     JsonObjectConst fnArgs = fc["args"].as<JsonObjectConst>();
 
-                    String toolResult = tools.executeToolCall(fnName, fnArgs);
+                    String toolResult;
+                    if (fnName == "salvar_memoria_usuario") {
+                        if (memoryProposalReply.isEmpty()) {
+                            String fact = fnArgs["fato"] | "";
+                            memoryProposalReply = memory.proposeConversationMemory(fact);
+                        }
+                        toolResult = memoryProposalReply;
+                    } else {
+                        toolResult = tools.executeToolCall(fnName, fnArgs);
+                    }
                     if (fallbackToolSummary.length() > 0) fallbackToolSummary += " ";
                     fallbackToolSummary += toolResult;
 
@@ -306,6 +329,10 @@ public:
                     rp["functionResponse"]["name"] = fnName;
                     rp["functionResponse"]["response"]["result"] = toolResult;
                 }
+            }
+            if (!memoryProposalReply.isEmpty()) {
+                lastReplyText = memoryProposalReply;
+                return memoryProposalReply;
             }
         }
 

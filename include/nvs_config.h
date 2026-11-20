@@ -16,6 +16,8 @@ private:
     String geminiKey;
     String defaultCity;
 
+    uint8_t tftBrightness = TFT_AWAKE_BRIGHTNESS;
+    bool bleEnabled = true;
     uint8_t sfxVolume       = 75;
     bool    sfxMuted        = false;
     bool    sfxIdleEnabled  = true;
@@ -41,6 +43,8 @@ public:
         wifiPass        = prefs.getString("wifi_pass", "");
         geminiKey       = prefs.getString("gemini_key", "");
         defaultCity     = prefs.getString("city", "Sao Paulo");
+        tftBrightness   = prefs.getUChar("tft_bri", TFT_AWAKE_BRIGHTNESS);
+        bleEnabled      = prefs.getBool("ble_enabled", true);
         sfxVolume       = (uint8_t)constrain((int)prefs.getUChar("sfx_vol", 75), 0, 100);
         sfxMuted        = prefs.getBool("sfx_mute", false);
         sfxIdleEnabled  = prefs.getBool("sfx_idle", true);
@@ -74,6 +78,25 @@ public:
         prefs.putString("city", defaultCity);
         prefs.end();
     }
+
+    void saveTftBrightness(uint8_t level) {
+        if (tftBrightness == level) return;
+        tftBrightness = level;
+        if (!prefs.begin("ciborgue", false)) return;
+        prefs.putUChar("tft_bri", level);
+        prefs.end();
+    }
+
+    void saveBleEnabled(bool enabled) {
+        if (bleEnabled == enabled) return;
+        bleEnabled = enabled;
+        if (!prefs.begin("ciborgue", false)) return;
+        prefs.putBool("ble_enabled", enabled);
+        prefs.end();
+    }
+
+    uint8_t getTftBrightness() const { return tftBrightness; }
+    bool isBleEnabled() const { return bleEnabled; }
 
     void saveSfxVolume(int vol) {
         sfxVolume = (uint8_t)constrain(vol, 0, 100);

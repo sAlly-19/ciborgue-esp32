@@ -1,0 +1,20 @@
+{
+  "expo": {
+    "name": "Ciborgue",
+    "slug": "ciborgue-app",
+    "scheme": "ciborgueapp",
+    "version": "1.0.0",
+    "userInterfaceStyle": "automatic",
+    "android": { "package": "com.ciborgue.app" },
+    "plugins": [
+      "expo-router",
+      ["expo-build-properties", { "android": { "usesCleartextTraffic": true } }],
+      ["react-native-ble-plx", {
+        "neverForLocation": true,
+        "isBackgroundEnabled": false,
+        "bluetoothAlwaysPermission": "Permita o Bluetooth para configurar seu Ciborgue."
+      }]
+    ],
+    "web": { "output": "single" }
+  }
+}

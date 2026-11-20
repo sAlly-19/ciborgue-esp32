@@ -1,14 +1,23 @@
-# PlatformIO & Embedded
+# PlatformIO e artefatos do firmware
 .pio/
 .pioenvs/
 .piolibdeps/
 *.elf
 *.bin
+*.map
 
-# Ambiente e Chaves Secretas (NUNCA SUBIR AO GITHUB)
+# Configurações locais e chaves
 .env
+.env.*
 *.env
 !.env.example
+*.pem
+*.key
+*.jks
+*.keystore
+*.p8
+*.p12
+*.mobileprovision
 
 # Python
 __pycache__/
@@ -19,16 +28,40 @@ __pycache__/
 env/
 venv/
 ENV/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+*.egg-info/
 
-# Arquivos de Áudio temporários
+# Expo, Android e dependências locais
+node_modules/
+.expo/
+.gradle/
+.kotlin/
+dist/
+web-build/
+coverage/
+expo-env.d.ts
+*.tsbuildinfo
+*.apk
+*.aab
+local.properties
+/ciborgue-app/android/
+/ciborgue-app/ios/
+
+# Áudio temporário e logs
 *.mp3
 *.wav
+*.log
 
-# IDEs
+# IDE e sistema operacional
 .vscode/
 .idea/
 *.sublime-project
 *.sublime-workspace
+Thumbs.db
+.DS_Store
 
-# Espelho Local de Memórias NVS
+# Dados locais da bancada
 ciborgue_memory_mirror.json
+/HANDOFF_CODEX_DISPLAY.md

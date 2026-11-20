@@ -5,7 +5,7 @@ from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (
     QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
     QLabel, QLineEdit, QPushButton, QTextEdit, QGroupBox, QGridLayout,
-    QComboBox, QProgressBar
+    QComboBox, QProgressBar, QSpinBox
 )
 
 from app.config import ENV_PATH, GEMINI_VOICES
@@ -147,7 +147,8 @@ class CiborgueWorkbenchWindow(QMainWindow):
             ("😠 Bravo", "ANGRY"), ("😴 Sonolento", "SLEEPY"),
             ("😨 Medo", "FEAR"), ("🤢 Nojo", "DISGUST"),
             ("😒 Desprezo", "CONTEMPT"), ("😳 Vergonha", "SHAME"),
-            ("😱 Desespero", "DESPAIR"), ("😈 Malícia", "MALICE")
+            ("😱 Desespero", "DESPAIR"), ("😈 Malícia", "MALICE"),
+            ('Curioso', 'CURIOUS'), ('Tédio', 'BORED'), ('Silêncio', 'SILENT'), ('Anjinho', 'ANGEL'), ('Chavoso', 'COOL'), ('Louco', 'CRAZY'), ('Mentiroso', 'LIAR')
         ]
         for idx, (label, code) in enumerate(emotions):
             btn = QPushButton(label)
@@ -167,7 +168,7 @@ class CiborgueWorkbenchWindow(QMainWindow):
         for idx, (label, cmd_val) in enumerate(colors):
             btn = QPushButton(label)
             btn.clicked.connect(lambda _, v=cmd_val: self.serial_bridge.send_cmd(f"CMD:COLOR={v}"))
-            emo_grid.addWidget(btn, 4 + (idx // 4), idx % 4)
+            emo_grid.addWidget(btn, (len(emotions) + 3) // 4 + idx // 4, idx % 4)
 
         # Linha rápida de Widgets / Relógio de Mesa / Humor / Carinho
         self.btn_desk_clock = QPushButton("🕰️ Relógio Mesa")
@@ -247,6 +248,22 @@ class CiborgueWorkbenchWindow(QMainWindow):
         self.bar_mic.setFormat("Nível do Microfone: %p%")
         audio_layout.addWidget(self.bar_mic, 2, 1, 1, 2)
 
+        audio_layout.addWidget(QLabel("Brilho da tela:"), 3, 0)
+        self.tft_brightness = QSpinBox()
+        self.tft_brightness.setRange(0, 255)
+        self.tft_brightness.setEnabled(False)
+        audio_layout.addWidget(self.tft_brightness, 3, 1)
+        self.apply_tft_brightness = QPushButton("Aplicar brilho")
+        self.apply_tft_brightness.setEnabled(False)
+        self.apply_tft_brightness.clicked.connect(
+            lambda: self.serial_bridge.send_cmd(f"CMD:TFT_BRI={self.tft_brightness.value()}")
+        )
+        audio_layout.addWidget(self.apply_tft_brightness, 3, 2)
+        self.tft_brightness.valueChanged.connect(
+            lambda level: self.apply_tft_brightness.setEnabled(
+                level != self.face_canvas.telemetry.get("tft_brightness")
+            )
+        )
         right_col.addWidget(audio_group)
 
         # 3. Painel Modular de Assistente Pessoal (Tarefas NVS, Memórias, Pomodoro e Carinho)
@@ -322,6 +339,9 @@ class CiborgueWorkbenchWindow(QMainWindow):
         self.signals.mic_level_changed.connect(self.bar_mic.setValue)
         self.signals.conv_window_changed.connect(self.on_conv_window_changed)
         self.signals.audio_lipsync_frame.connect(self.face_canvas.set_audio_lipsync)
+        self.signals.audio_lipsync_frame.connect(
+            self.serial_bridge.queue_lipsync, Qt.ConnectionType.DirectConnection
+        )
 
         # Sinais dos novos módulos
         self.signals.memories_updated.connect(self.assistant_panel.update_memories_list)
@@ -444,7 +464,14 @@ class CiborgueWorkbenchWindow(QMainWindow):
         self.append_log(f"<b style='color:#38bdf8'>🤖 CIBORGUE ({self.tts_manager.selected_voice}):</b> {text}")
 
     def on_telemetry_received(self, data: dict):
+        old_brightness = self.face_canvas.telemetry.get("tft_brightness")
         self.face_canvas.telemetry.update(data)
+        brightness = data.get("tft_brightness")
+        if isinstance(brightness, int) and 0 <= brightness <= 255:
+            if (not self.tft_brightness.isEnabled() or self.tft_brightness.value() == old_brightness):
+                self.tft_brightness.setValue(brightness)
+            self.tft_brightness.setEnabled(True)
+            self.apply_tft_brightness.setEnabled(self.tft_brightness.value() != brightness)
         new_state = data.get("state", self.face_canvas.state)
         if not self.tts_manager.is_busy() and new_state != "SPEAK":
             self.face_canvas.state = new_state

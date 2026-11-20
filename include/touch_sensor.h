@@ -10,6 +10,7 @@
 #include "personality_manager.h"
 
 extern void notifyUserActivity();
+extern void setRobotEmotion(FaceEmotion emotion);
 extern bool handlePriorityTapAction();
 
 class TouchHeadSensor {
@@ -70,17 +71,15 @@ public:
         }
         lastPetReactionMillis = millis();
         FaceEmotion emo = personality.onPet();
-        currentEmotion = emo;
-        display.setEmotion(emo);
+        setRobotEmotion(emo);
         if (emo == EMO_SHAME) {
             led.setCustomColor(255, 110, 170, LED_MODE_PULSE);
-            sfx.play(SFX_SHAME);
+            sfx.play(SFX_SHAME, personality.reactionGain(true));
         } else {
             led.setCustomColor(255, 50, 150, LED_MODE_PULSE);
-            sfx.play(SFX_LOVE);
+            sfx.play(emo == EMO_HAPPY ? SFX_HAPPY : SFX_LOVE, personality.reactionGain(true));
         }
 
-        Serial.printf("EVT:EMOTION=%s\n", emotionToString(emo));
         Serial.println("EVT:PET=1");
 
         if (speakOutLoud && currentState != STATE_SPEAK && currentState != STATE_THINK) {

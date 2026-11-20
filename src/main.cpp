@@ -14,6 +14,7 @@
 #include "touch_sensor.h"
 #include "captive_portal.h"
 #include "power_manager.h"
+#include "ble_settings.h"
 #include "tools_controller.h"
 #include "offline_engine.h"
 #include "gemini_brain.h"
@@ -51,6 +52,8 @@ static size_t serialPos = 0;
 static unsigned long lastTelemetryMillis = 0;
 static unsigned long alertStartMillis = 0;
 static unsigned long lastTimerSyncMillis = 0;
+
+BleSettings bleSettings(nvsConfig, powerManager);
 
 void notifyUserActivity() {
     powerManager.registerActivity();
@@ -127,6 +130,7 @@ void setRobotState(RobotState newState) {
 }
 
 void setRobotEmotion(FaceEmotion newEmotion) {
+    personalityManager.trackReaction(newEmotion, powerManager.getStage() == PWR_AWAKE);
     currentEmotion = newEmotion;
     displayHal.setEmotion(newEmotion);
     Serial.printf("EVT:EMOTION=%s\n", emotionToString(newEmotion));
@@ -171,6 +175,9 @@ void sendTelemetryPacket() {
     doc["sfx_mute"]      = nvsConfig.isSfxMuted();
     doc["sfx_idle"]      = nvsConfig.isSfxIdleEnabled();
     doc["fast_path"]     = nvsConfig.isFastPathEnabled();
+    doc["tft_brightness"] = nvsConfig.getTftBrightness();
+    doc["ble_enabled"] = nvsConfig.isBleEnabled();
+    doc["ble_connected"] = bleSettings.isConnected();
 
     doc["desk_clock"]    = displayHal.isDeskClockActive();
     doc["alarm_ringing"] = alarmManager.isRinging();
@@ -244,6 +251,22 @@ void processSerialCommand(String cmd) {
         return;
     }
 
+    constexpr char lipSyncPrefix[] = "CMD:LIPSYNC=";
+    if (cmd.startsWith(lipSyncPrefix)) {
+        const char* payload = cmd.c_str() + sizeof(lipSyncPrefix) - 1;
+        char* separator;
+        const float amp = strtof(payload, &separator);
+        if (separator != payload && *separator == ',') {
+            char* end;
+            const float zcr = strtof(separator + 1, &end);
+            if (end != separator + 1 && *end == '\0' &&
+                amp >= 0.0f && amp <= 1.0f && zcr >= 0.0f && zcr <= 1.0f) {
+                displayHal.setLipSync(amp, zcr);
+            }
+        }
+        return;
+    }
+
     powerManager.registerActivity();
 
     // Calibração rápida da tela física via Serial (orientação, inversão de cores e brilho)
@@ -259,10 +282,33 @@ void processSerialCommand(String cmd) {
         Serial.printf("EVT:LOG=Display invert=%d\n", inv ? 1 : 0);
         return;
     }
+    if (cmd == "CMD:BLE_PIN") {
+        if (nvsConfig.isBleEnabled() && bleSettings.getPin() != 0) Serial.printf("EVT:BLE_PIN=%06lu\n", (unsigned long)bleSettings.getPin());
+        else Serial.println("ERR:BLE_DISABLED");
+        return;
+    }
+    if (cmd == "CMD:BLE=0" || cmd == "CMD:BLE=1") {
+        const bool enabled = cmd.endsWith("1");
+        bleSettings.setEnabled(enabled);
+        Serial.printf("EVT:BLE_ENABLED=%d\n", enabled);
+        return;
+    }
+    if (cmd == "CMD:TFT_BRI?") {
+        Serial.printf("EVT:TFT_BRI=%u\n", (unsigned)nvsConfig.getTftBrightness());
+        return;
+    }
     if (cmd.startsWith("CMD:TFT_BRI=")) {
-        uint8_t bri = (uint8_t)constrain(cmd.substring(12).toInt(), 0, 255);
-        displayHal.setBrightness(bri);
+        const char* value = cmd.c_str() + 12;
+        char* end;
+        const long parsed = strtol(value, &end, 10);
+        if (end == value || *end != '\0' || parsed < 0 || parsed > 255) {
+            Serial.println("ERR:TFT_BRI_RANGE");
+            return;
+        }
+        const uint8_t bri = parsed;
+        powerManager.setDisplayBrightness(bri);
         Serial.printf("EVT:LOG=Display brilho=%u\n", (unsigned)bri);
+        sendTelemetryPacket();
         return;
     }
     if (cmd == "CMD:TFT_TEST") {
@@ -604,16 +650,17 @@ void setup() {
     Serial.println("   ROBO CIBORGUE ESP32-S3 (CEREBRO AUTONOMO)  ");
     Serial.println("==============================================");
 
-    ledController.begin();
-    displayHal.begin();
-    audioHal.begin();
     nvsConfig.begin();
+    ledController.begin();
+    displayHal.begin(nvsConfig.getTftBrightness());
+    audioHal.begin();
     sfxSynth.begin();
     memoryManager.begin();
     touchSensor.begin();
     personalityManager.begin();
     alarmManager.begin();
     powerManager.begin();
+    bleSettings.begin();
 
     sfxSynth.play(SFX_BOOT);
 
@@ -691,9 +738,9 @@ void loop() {
     // 3. Sensores, Alarmes, Personalidade, Pomodoro, Sono Inteligente e Portal Cativo
     touchSensor.update();
     alarmManager.update();
-    personalityManager.update(captivePortal.isActive() || alarmManager.isRinging() || displayHal.isDeskClockActive());
     pomodoroManager.update();
     powerManager.update(currentState, activeTimer);
+    personalityManager.update(powerManager.getStage(), captivePortal.isActive() || alarmManager.isRinging() || displayHal.hasActiveCard() || displayHal.isDeskClockActive());
     captivePortal.update();
 
     // 4. Manutenção Wi-Fi resiliente (backoff exponencial), servidor HTTP/UDP e chirps ociosos
@@ -719,7 +766,7 @@ void loop() {
     }
 
     wifiApiServer.handleClient();
-    sfxSynth.updateIdleChirp(currentState, powerManager.getStage());
+    bleSettings.update();
 
     if (millis() - lastTelemetryMillis > 5000) {
         lastTelemetryMillis = millis();

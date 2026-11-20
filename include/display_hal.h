@@ -8,6 +8,7 @@
 #include <freertos/semphr.h>
 #include "config.h"
 #include "robot_types.h"
+#include "bench_face_assets.h"
 
 #if ENABLE_PHYSICAL_DISPLAY
 #include <SPI.h>
@@ -68,7 +69,14 @@ enum MouthKey : uint8_t {
     MK_CONTEMPT,
     MK_SHAME,
     MK_DESPAIR,
-    MK_MALICE
+    MK_MALICE,
+    MK_CURIOUS,
+    MK_BORED,
+    MK_SILENT,
+    MK_ANGEL,
+    MK_COOL,
+    MK_CRAZY,
+    MK_LIAR
 };
 
 /**
@@ -77,24 +85,28 @@ enum MouthKey : uint8_t {
  */
 struct FaceMorphEngine {
     SpringF colR, colG, colB;
-    SpringF eyeW, leftH, rightH, offX, offY, shakeAmp;
+    SpringF eyeW, leftH, rightH, offX, offY, shakeAmp, tilt;
     SpringF lTopL, lTopR, rTopL, rTopR;
     SpringF lBotL, lBotR, rBotL, rBotR;
     SpringF botArc, fearCorner;
-    SpringF fearW, shameW, despairW;
+    SpringF fearW, shameW, despairW, blushW, blushIntensity, blushY, sweatW, sweatScale, loveW, maliceW;
 
     MouthKey prevMouth = MK_NEUTRAL;
     MouthKey currMouth = MK_NEUTRAL;
     float mouthT = 1.0f;
+    uint32_t lastMouthStep = 0;
 
     FaceMorphEngine() {
         colR.init(0.0f); colG.init(238.0f); colB.init(255.0f);
         eyeW.init(76.0f); leftH.init(81.0f); rightH.init(81.0f);
-        offX.init(0.0f); offY.init(0.0f); shakeAmp.init(0.0f);
+        offX.init(0.0f); offY.init(0.0f); shakeAmp.init(0.0f); tilt.init(0.0f);
         lTopL.init(0.0f); lTopR.init(0.0f); rTopL.init(0.0f); rTopR.init(0.0f);
         lBotL.init(0.0f); lBotR.init(0.0f); rBotL.init(0.0f); rBotR.init(0.0f);
         botArc.init(0.0f); fearCorner.init(0.0f);
-        fearW.init(0.0f); shameW.init(0.0f); despairW.init(0.0f);
+        fearW.init(0.0f); shameW.init(0.0f); despairW.init(0.0f); blushW.init(0.0f);
+        blushIntensity.init(1.0f); blushY.init(44.0f);
+        sweatW.init(0.0f); sweatScale.init(1.0f);
+        loveW.init(0.0f); maliceW.init(0.0f);
     }
 
     static MouthKey resolveMouthKey(RobotState st, FaceEmotion emo) {
@@ -115,11 +127,18 @@ struct FaceMorphEngine {
             case EMO_SHAME:     return MK_SHAME;
             case EMO_DESPAIR:   return MK_DESPAIR;
             case EMO_MALICE:    return MK_MALICE;
+            case EMO_CURIOUS: return MK_CURIOUS;
+            case EMO_BORED: return MK_BORED;
+            case EMO_SILENT: return MK_SILENT;
+            case EMO_ANGEL: return MK_ANGEL;
+            case EMO_COOL: return MK_COOL;
+            case EMO_CRAZY: return MK_CRAZY;
+            case EMO_LIAR: return MK_LIAR;
             default:            return MK_NEUTRAL;
         }
     }
 
-    void step(RobotState st, FaceEmotion emo, unsigned long now, bool blinking) {
+    void step(RobotState st, FaceEmotion emo, unsigned long now) {
         // 1. Alvo de cor RGB888 para fusão suave
         float tr = 0.0f, tg = 190.0f, tb = 255.0f;
         if (st == STATE_LISTEN) {
@@ -143,6 +162,13 @@ struct FaceMorphEngine {
                 case EMO_SHAME:    tr = 255.0f; tg = 154.0f; tb = 186.0f; break;
                 case EMO_DESPAIR:  tr = 114.0f; tg = 114.0f; tb = 255.0f; break;
                 case EMO_MALICE:   tr = 194.0f; tg = 70.0f;  tb = 255.0f; break;
+                case EMO_CURIOUS: tr = 65.0f; tg = 214.0f; tb = 255.0f; break;
+                case EMO_BORED: tr = 146.0f; tg = 158.0f; tb = 220.0f; break;
+                case EMO_SILENT: tr = 132.0f; tg = 222.0f; tb = 211.0f; break;
+                case EMO_ANGEL: tr = 255.0f; tg = 219.0f; tb = 115.0f; break;
+                case EMO_COOL: tr = 64.0f; tg = 200.0f; tb = 255.0f; break;
+                case EMO_CRAZY: tr = 255.0f; tg = 128.0f; tb = 92.0f; break;
+                case EMO_LIAR: tr = 255.0f; tg = 170.0f; tb = 90.0f; break;
                 default:           tr = 0.0f;   tg = 238.0f; tb = 255.0f; break;
             }
         }
@@ -151,91 +177,49 @@ struct FaceMorphEngine {
         colG.step(0.14f, 0.78f);
         colB.step(0.14f, 0.78f);
 
-        // 2. Alvos de geometria e pálpebras por emoção
-        float tw = 76.0f, tlh = 81.0f, trh = 81.0f;
-        float tox = 0.0f, toy = 0.0f, tshk = 0.0f;
-        float tl1 = 0.0f, tl2 = 0.0f, tr1 = 0.0f, tr2 = 0.0f;
-        float bl1 = 0.0f, bl2 = 0.0f, br1 = 0.0f, br2 = 0.0f;
-        float tarc = 0.0f, tfear = 0.0f;
-        float tfw = 0.0f, tsw = 0.0f, tdw = 0.0f;
-
-        switch (emo) {
-            case EMO_HAPPY:
-                tarc = 1.0f;
-                break;
-            case EMO_SAD:
-                tl1 = 0.42f; tl2 = 0.06f; tr1 = 0.06f; tr2 = 0.42f;
-                toy = 4.0f;
-                break;
-            case EMO_ANGRY:
-                tl1 = 0.06f; tl2 = 0.42f; tr1 = 0.42f; tr2 = 0.06f;
-                tshk = 1.5f;
-                break;
-            case EMO_SURPRISED:
-                tw = 82.0f; tlh = 91.0f; trh = 91.0f;
-                break;
-            case EMO_WINK:
-                trh = 6.0f;
-                break;
-            case EMO_SLEEPY:
-                tlh = 28.0f; trh = 28.0f; toy = 6.0f;
-                break;
-            case EMO_FEAR:
-                tw = 73.0f; tlh = 89.0f; trh = 89.0f; toy = -5.0f;
-                tfear = 1.0f; tfw = 1.0f; tshk = 1.0f;
-                break;
-            case EMO_DISGUST:
-                tw = 77.0f; tlh = 45.0f; trh = 58.0f; tox = -8.0f; toy = -3.0f;
-                tl1 = 0.14f; tl2 = 0.44f; tr1 = 0.42f; tr2 = 0.16f;
-                bl1 = 0.06f; bl2 = 0.36f; br1 = 0.28f; br2 = 0.05f;
-                break;
-            case EMO_CONTEMPT:
-                tw = 77.0f; tlh = 69.0f; trh = 69.0f; tox = 13.0f; toy = -2.0f;
-                tl1 = 0.47f; tl2 = 0.47f; tr1 = 0.47f; tr2 = 0.25f;
-                break;
-            case EMO_SHAME:
-                tw = 68.0f; tlh = 65.0f; trh = 65.0f;
-                tox = -12.0f; toy = 9.0f; toy = 4.0f;
-                tl1 = 0.33f; tl2 = 0.04f; tr1 = 0.04f; tr2 = 0.33f;
-                tsw = 1.0f;
-                break;
-            case EMO_DESPAIR:
-                tw = 79.0f; tlh = 87.0f; trh = 87.0f; toy = 5.0f;
-                tl1 = 0.41f; tl2 = 0.04f; tr1 = 0.04f; tr2 = 0.41f;
-                tdw = 1.0f; tshk = 2.0f;
-                break;
-            case EMO_MALICE:
-                tw = 79.0f; tlh = 66.0f; trh = 66.0f; tox = 9.0f; toy = -3.0f;
-                tl1 = 0.06f; tl2 = 0.47f; tr1 = 0.47f; tr2 = 0.06f;
-                tarc = 0.7619f;
-                break;
-            default:
-                break;
+        static_assert(sizeof(bench_face::poses) / sizeof(bench_face::poses[0]) == EMO_LIAR + 1,
+                      "Bench poses must match FaceEmotion");
+        const auto& pose = bench_face::poses[static_cast<unsigned>(emo)];
+        eyeW.target = 76.0f * pose.w_scale;
+        leftH.target = 81.2f * pose.lh_scale;
+        rightH.target = 81.2f * pose.rh_scale;
+        offX.target = 1.16f * pose.gaze_x;
+        offY.target = 1.16f * pose.gaze_y;
+        if (st == STATE_THINK) {
+            offX.target = 13.92f * sinf((now % 1676) * 0.00375f);
+            offY.target = -12.76f;
         }
+        shakeAmp.target = 1.16f * pose.shake_amp;
+        tilt.target = pose.tilt;
+        eyeW.step(0.16f, 0.68f); leftH.step(0.16f, 0.68f); rightH.step(0.16f, 0.68f);
+        offX.step(0.16f, 0.74f); offY.step(0.16f, 0.74f); shakeAmp.step(0.18f, 0.76f);
+        tilt.step(0.14f, 0.76f);
 
-        if (blinking && emo != EMO_SLEEPY) {
-            tlh = 6.0f;
-            trh = 6.0f;
-        }
-
-        const float gk = blinking ? 0.42f : 0.19f;
-        const float gd = blinking ? 0.60f : 0.68f;
-        eyeW.target = tw; leftH.target = tlh; rightH.target = trh;
-        offX.target = tox; offY.target = toy; shakeAmp.target = tshk;
-        eyeW.step(0.19f, 0.68f); leftH.step(gk, gd); rightH.step(gk, gd);
-        offX.step(0.18f, 0.74f); offY.step(0.18f, 0.74f); shakeAmp.step(0.18f, 0.76f);
-
-        lTopL.target = tl1; lTopR.target = tl2; rTopL.target = tr1; rTopR.target = tr2;
-        lBotL.target = bl1; lBotR.target = bl2; rBotL.target = br1; rBotR.target = br2;
-        botArc.target = tarc; fearCorner.target = tfear;
+        lTopL.target = pose.l_top_l; lTopR.target = pose.l_top_r;
+        rTopL.target = pose.r_top_l; rTopR.target = pose.r_top_r;
+        lBotL.target = pose.l_bot_l; lBotR.target = pose.l_bot_r;
+        rBotL.target = pose.r_bot_l; rBotR.target = pose.r_bot_r;
+        botArc.target = pose.bot_arc; fearCorner.target = pose.fear_corner;
         lTopL.step(0.19f, 0.68f); lTopR.step(0.19f, 0.68f);
         rTopL.step(0.19f, 0.68f); rTopR.step(0.19f, 0.68f);
         lBotL.step(0.19f, 0.68f); lBotR.step(0.19f, 0.68f);
         rBotL.step(0.19f, 0.68f); rBotR.step(0.19f, 0.68f);
         botArc.step(0.19f, 0.68f); fearCorner.step(0.19f, 0.68f);
 
-        fearW.target = tfw; shameW.target = tsw; despairW.target = tdw;
+        blushW.target = pose.blush_alpha;
+        blushIntensity.target = pose.blush_intensity;
+        blushY.target = pose.blush_y_off;
+        sweatW.target = pose.sweat_alpha;
+        sweatScale.target = pose.sweat_scale;
+        fearW.target = emo == EMO_FEAR;
+        shameW.target = emo == EMO_SHAME;
+        despairW.target = emo == EMO_DESPAIR;
+        loveW.target = emo == EMO_LOVE;
+        maliceW.target = emo == EMO_MALICE;
+        blushW.step(0.20f, 0.78f); blushIntensity.step(0.20f, 0.78f); blushY.step(0.20f, 0.78f);
+        sweatW.step(0.20f, 0.78f); sweatScale.step(0.20f, 0.78f);
         fearW.step(0.20f, 0.78f); shameW.step(0.20f, 0.78f); despairW.step(0.20f, 0.78f);
+        loveW.step(0.20f, 0.78f); maliceW.step(0.20f, 0.78f);
 
         // 3. Progresso do morph elástico da boca (~260ms em 50 FPS)
         MouthKey nextMk = resolveMouthKey(st, emo);
@@ -244,9 +228,11 @@ struct FaceMorphEngine {
             currMouth = nextMk;
             mouthT = 0.0f;
         }
+        const uint32_t elapsed = now - lastMouthStep;
+        lastMouthStep = now;
         if (mouthT < 1.0f) {
-            float spd = (currMouth == MK_SPEAK) ? 0.14f : 0.075f;
-            mouthT = min(1.0f, mouthT + spd);
+            const float duration = currMouth == MK_SPEAK ? 112.0f : 215.0f;
+            mouthT = min(1.0f, mouthT + min(elapsed, uint32_t{64}) / duration);
         }
     }
 
@@ -304,6 +290,11 @@ private:
     String pcAction = "";
     String pcParam = "";
 
+    float lipAmp = 0.0f;
+    float lipZcr = 0.0f;
+    uint32_t lipSampleMs = 0;
+    bool lipSampleValid = false;
+
     void lockState() const {
         if (stateMux) xSemaphoreTake(stateMux, portMAX_DELAY);
     }
@@ -322,8 +313,29 @@ private:
     uint8_t timedEyeFrames = 0;
     uint32_t eyeTimingStartUs = 0;
     uint32_t eyeTransferUs = 0;
+    uint32_t eyeDrawUs = 0;
+    float speechWidth = 32.0f;
+    float speechHeight = 4.5f;
+    enum class FaceParticleKind : uint8_t { None, Heart, Star, Sweat, Tear, Zzz, Spark, Dot, Bubble };
+    struct FaceParticle {
+        FaceParticleKind kind = FaceParticleKind::None;
+        uint32_t born = 0;
+        uint16_t life = 0;
+        int16_t x = 0, y = 0;
+        int8_t vx = 0, vy = 0;
+        uint8_t size = 0;
+    };
+    FaceParticle faceParticles[8];
+    FaceEmotion animatedEmotion = EMO_NEUTRAL;
+    RobotState animatedState = STATE_IDLE;
+    uint32_t expressionStarted = 0, gestureStarted = 0, nextGesture = 0;
+    uint32_t motionUpdated = 0, nextParticle = 0;
+    float gazeX = 0, gazeY = 0, gazeTilt = 0, gazeSquint = 0;
+    float targetGazeX = 0, targetGazeY = 0, targetTilt = 0, targetSquint = 0;
     SemaphoreHandle_t tftMux = nullptr;
     uint8_t currentRotation = 0;
+    uint8_t currentBrightness = TFT_AWAKE_BRIGHTNESS;
+    bool currentInversion = false;
     static constexpr uint8_t backlightChannel = 7;
     static constexpr uint8_t bgrBit = 0x08;
     static constexpr uint32_t commandSpiHz = 4000000;
@@ -397,31 +409,7 @@ private:
         rawWriteCmdData(PIN_TFT_DC, PIN_TFT_CS, cmd, data, sizeof(data), SPI_MODE0);
     }
 
-    // Caller holds tftMux. RAMWR keeps CS low across all pixel chunks.
-    void pushCanvasViaSpi() {
-        const auto* pixels = static_cast<const uint16_t*>(canvas.getBuffer());
-        int left = 0, top = 0, right = FACE_SCREEN_W - 1, bottom = FACE_SCREEN_H - 1;
-        if (previousFrameValid) {
-            left = FACE_SCREEN_W;
-            top = FACE_SCREEN_H;
-            right = bottom = -1;
-            constexpr size_t rowBytes = FACE_SCREEN_W * sizeof(uint16_t);
-            for (int y = 0; y < FACE_SCREEN_H; ++y) {
-                const auto* row = pixels + y * FACE_SCREEN_W;
-                const auto* prior = previousFrame + y * FACE_SCREEN_W;
-                if (memcmp(row, prior, rowBytes) == 0) continue;
-                int x0 = 0;
-                int x1 = FACE_SCREEN_W - 1;
-                while (row[x0] == prior[x0]) ++x0;
-                while (row[x1] == prior[x1]) --x1;
-                left = min(left, x0);
-                right = max(right, x1);
-                top = min(top, y);
-                bottom = y;
-            }
-            if (right < 0) return;
-        }
-
+    void pushCanvasRegion(const uint16_t* pixels, int left, int top, int right, int bottom) {
         // Compensate for the panel's horizontal mirror in canvas coordinates.
         const int outputLeft = FACE_SCREEN_W - 1 - right;
         const int outputRight = FACE_SCREEN_W - 1 - left;
@@ -454,9 +442,53 @@ private:
         if (used) SPI.writeBytes(transferChunk, used);
         endCommand(PIN_TFT_CS);
 
-        if (previousFrame) {
-            memcpy(previousFrame, pixels, FACE_SCREEN_W * FACE_SCREEN_H * sizeof(uint16_t));
-            previousFrameValid = true;
+    }
+
+    // Caller holds tftMux. Split face updates so an animated mouth and two
+    // animated eyes do not force a transfer of the empty space between them.
+    void pushCanvasViaSpi(bool face = false) {
+        const auto* pixels = static_cast<const uint16_t*>(canvas.getBuffer());
+        struct Region { int left, top, right, bottom; };
+        constexpr Region whole = {0, 0, FACE_SCREEN_W - 1, FACE_SCREEN_H - 1};
+        constexpr Region faceRegions[] = {
+            {0, 0, FACE_SCREEN_W - 1, 51},
+            {0, 52, FACE_SCREEN_W / 2 - 1, 147},
+            {FACE_SCREEN_W / 2, 52, FACE_SCREEN_W - 1, 147},
+            {0, 148, FACE_SCREEN_W - 1, FACE_SCREEN_H - 1},
+        };
+        if (!previousFrameValid) {
+            pushCanvasRegion(pixels, whole.left, whole.top, whole.right, whole.bottom);
+            if (previousFrame) {
+                memcpy(previousFrame, pixels, FACE_SCREEN_W * FACE_SCREEN_H * sizeof(uint16_t));
+                previousFrameValid = true;
+            }
+            return;
+        }
+
+        const Region* regions = face ? faceRegions : &whole;
+        const size_t count = face ? sizeof(faceRegions) / sizeof(faceRegions[0]) : 1;
+        for (size_t i = 0; i < count; ++i) {
+            const auto& region = regions[i];
+            int left = region.right;
+            int right = -1;
+            int top = region.bottom;
+            int bottom = -1;
+            const size_t rowBytes = (region.right - region.left + 1) * sizeof(uint16_t);
+            for (int y = region.top; y <= region.bottom; ++y) {
+                const auto* row = pixels + y * FACE_SCREEN_W;
+                auto* prior = previousFrame + y * FACE_SCREEN_W;
+                if (memcmp(row + region.left, prior + region.left, rowBytes) == 0) continue;
+                int x0 = region.left;
+                int x1 = region.right;
+                while (row[x0] == prior[x0]) ++x0;
+                while (row[x1] == prior[x1]) --x1;
+                left = min(left, x0);
+                right = max(right, x1);
+                top = min(top, y);
+                bottom = y;
+                memcpy(prior + x0, row + x0, (x1 - x0 + 1) * sizeof(uint16_t));
+            }
+            if (right >= 0) pushCanvasRegion(pixels, left, top, right, bottom);
         }
     }
 
@@ -792,7 +824,7 @@ private:
     }
 
     void drawSingleEyeMorph(int ex, int centerY, int ew, int eh, bool isLeft,
-                            uint16_t eyeColor, int shakeX, unsigned long now) {
+                            int shakeX, unsigned long now) {
         int ey = centerY - eh / 2;
         const int rad = min(23, min(ew, eh) / 2);
         const float red = faceMorph.colR.val;
@@ -816,6 +848,45 @@ private:
                                ew * 6 / 100, eh * 6 / 100,
                                packRgb565((red + 255) * 0.5f, (green + 255) * 0.5f,
                                           (blue + 255) * 0.5f));
+        }
+
+        if (eh > 22) {
+            float fw = clampf01(faceMorph.fearW.val);
+            if (fw > 0.10f) {
+                int pr = max(2, (int)(8.0f * fw));
+                canvas.fillCircle(ex + ew / 2 + shakeX, centerY, pr, TFT_BLACK);
+                canvas.fillCircle(ex + ew / 2 + shakeX - 2, centerY - 2, 2, 0xEFFF);
+            }
+
+            float dw = clampf01(faceMorph.despairW.val);
+            if (dw > 0.10f) {
+                int rcx = ex + ew / 2;
+                int r1 = max(2, (int)(14.0f * dw));
+                int r2 = max(3, (int)(22.0f * dw));
+                canvas.drawCircle(rcx, centerY + 4, r1, TFT_BLACK);
+                canvas.drawCircle(rcx, centerY + 4, r2, TFT_BLACK);
+            }
+
+            if (faceMorph.loveW.val > 0.10f) {
+                const int cx = ex + ew / 2;
+                const int size = max(2, (int)roundf((7.0f + sinf((now % 700) * 0.009f)) * clampf01(faceMorph.loveW.val)));
+                const int cy = centerY + 2;
+                canvas.fillCircle(cx - size / 2, cy - size / 2, size, 0xFF9E);
+                canvas.fillCircle(cx + size / 2, cy - size / 2, size, 0xFF9E);
+                canvas.fillTriangle(cx - size * 3 / 2, cy - size / 4,
+                                    cx + size * 3 / 2, cy - size / 4,
+                                    cx, cy + size * 2, 0xFF9E);
+            }
+        }
+
+        if (eh > 22 && faceMorph.shameW.val > 0.10f) {
+            const int rx = max(1, (int)(ew * 0.17f * clampf01(faceMorph.shameW.val)));
+            canvas.fillEllipse(ex + ew * 38 / 100, centerY + eh * 18 / 100,
+                               rx, max(1, eh / 10), 0xFF9E);
+        }
+        if (eh > 20 && faceMorph.maliceW.val > 0.10f) {
+            const int ry = max(1, (int)(eh * 0.22f * clampf01(faceMorph.maliceW.val)));
+            canvas.fillEllipse(ex + ew / 2 + (isLeft ? 5 : -5), centerY + 2, 5, ry, 0xFEDF);
         }
 
         if (eh > 16) {
@@ -859,177 +930,316 @@ private:
             }
         }
 
-        if (eh > 22) {
-            float fw = clampf01(faceMorph.fearW.val);
-            if (fw > 0.10f) {
-                int pr = max(2, (int)(8.0f * fw));
-                canvas.fillCircle(ex + ew / 2 + shakeX, centerY, pr, TFT_BLACK);
-                if (!isLeft) {
-                    int dropY = centerY - 26 + (int)((now / 60) % 6);
-                    int dr = max(1, (int)(4.0f * fw));
-                    canvas.fillCircle(ex + ew + 8, dropY + 5, dr, 0x5FFF);
-                    canvas.fillTriangle(
-                        ex + ew + 8, dropY - dr,
-                        ex + ew + 8 - dr, dropY + dr,
-                        ex + ew + 8 + dr, dropY + dr,
-                        0x5FFF
-                    );
+        const float blush = clampf01(faceMorph.blushW.val);
+        if (blush > 0.02f) {
+            const int cx = ex + ew / 2 + (isLeft ? -13 : 13);
+            const int cy = centerY + (int)roundf(faceMorph.blushY.val * 1.16f);
+            canvas.fillEllipse(cx, cy, (int)(19 * faceMorph.blushIntensity.val), 8, packRgb565(88 * blush, 17 * blush, 47 * blush));
+            canvas.fillEllipse(cx, cy, 15, 5, packRgb565(200 * blush, 50 * blush, 105 * blush));
+            for (int dx = -7; dx <= 7; dx += 7) {
+                canvas.drawLine(cx + dx - 1, cy + 2, cx + dx + 1, cy - 2,
+                                packRgb565(255 * blush, 140 * blush, 174 * blush));
+            }
+        }
+
+        const float sweat = clampf01(faceMorph.sweatW.val) * constrain(faceMorph.sweatScale.val, 0.3f, 1.0f);
+        if (!isLeft && sweat > 0.10f) {
+            const int x = ex + ew + 4;
+            const int y = centerY - 16 + (int)roundf(sinf((now % 1000) * 0.006283f) * 2);
+            const int r = max(2, (int)(5 * sweat));
+            canvas.fillTriangle(x, y - r * 2, x - r, y, x + r, y, 0x5EFF);
+            canvas.fillEllipse(x, y, r, r + 1, 0x5EFF);
+            canvas.fillCircle(x - 1, y - 1, 1, 0xEFFF);
+        }
+    }
+
+    void updateSpeechMouth(RobotState state, uint32_t now, bool live, float amp, float zcr) {
+        float width = 32.0f;
+        float height = 4.5f;
+        if (state == STATE_SPEAK && !live) {
+            // Short overlapping syllable pulses for speech without PCM samples.
+            amp = 0.15f + 0.62f * powf(0.5f + 0.5f * sinf(now * 0.039f), 2.0f);
+            zcr = 0.5f + 0.4f * sinf(now * 0.023f);
+        }
+        if (state == STATE_SPEAK && amp > 0.04f) {
+            width = min(54.0f, 26.0f + zcr * 28.0f + amp * 14.0f);
+            height = min(30.0f, 6.5f + amp * 28.0f * (1.15f - 0.35f * zcr));
+        }
+        speechWidth += (width - speechWidth) * 0.65f;
+        speechHeight += (height - speechHeight) * (height > speechHeight ? 0.82f : 0.62f);
+    }
+
+    FaceParticleKind particleKind(RobotState state, FaceEmotion emotion) const {
+        if (state == STATE_THINK) return FaceParticleKind::Dot;
+        switch (emotion) {
+            case EMO_LOVE: return FaceParticleKind::Heart;
+            case EMO_HAPPY: case EMO_SURPRISED: case EMO_ANGEL: case EMO_CRAZY:
+                return FaceParticleKind::Star;
+            case EMO_SAD: case EMO_DESPAIR: return FaceParticleKind::Tear;
+            case EMO_SLEEPY: return FaceParticleKind::Zzz;
+            case EMO_FEAR: case EMO_SHAME: return FaceParticleKind::Sweat;
+            case EMO_DISGUST: return FaceParticleKind::Bubble;
+            case EMO_MALICE: return FaceParticleKind::Spark;
+            default: return FaceParticleKind::None;
+        }
+    }
+
+    void spawnFaceParticle(FaceParticleKind kind, uint32_t now) {
+        if (kind == FaceParticleKind::None) return;
+        for (auto& particle : faceParticles) {
+            if (particle.kind != FaceParticleKind::None && now - particle.born < particle.life) continue;
+            const bool falling = kind == FaceParticleKind::Tear || kind == FaceParticleKind::Sweat;
+            particle.kind = kind;
+            particle.born = now;
+            particle.life = random(420, 840);
+            particle.x = random(0, 2) ? random(39, 57) : random(238, 256);
+            particle.y = random(70, 104);
+            particle.vx = random(-7, 8);
+            particle.vy = falling ? random(25, 58) : random(-48, -22);
+            particle.size = random(3, 7);
+            return;
+        }
+    }
+
+    void updateFaceMotion(RobotState state, FaceEmotion emotion, uint32_t now, bool visible) {
+        const auto& pose = bench_face::poses[static_cast<unsigned>(emotion)];
+        const bool emotionChanged = emotion != animatedEmotion;
+        if (emotionChanged || state != animatedState || nextGesture == 0) {
+            if (emotionChanged) expressionStarted = now;
+            animatedEmotion = emotion;
+            animatedState = state;
+            timedEyeFrames = 0;
+            eyeTransferUs = eyeDrawUs = 0;
+            nextGesture = now + 1200;
+            gestureStarted = now - 1000;
+            targetGazeX = targetGazeY = targetTilt = targetSquint = 0;
+            for (auto& particle : faceParticles) particle.kind = FaceParticleKind::None;
+            nextParticle = now;
+        }
+        if (state == STATE_IDLE && (int32_t)(now - nextGesture) >= 0) {
+            nextGesture = now + random(1600, 3401);
+            if (pose.allow_idle_gaze || emotion == EMO_COOL || emotion == EMO_LIAR) {
+                gestureStarted = now;
+                const long choice = random(0, 100);
+                const bool glance = choice < 45;
+                targetGazeX = glance ? random(-14, 15) : 0;
+                targetGazeY = glance ? random(-7, 7) : 0;
+                if (emotion == EMO_BORED) {
+                    targetGazeX = glance ? 9.0f : 0.0f;
+                    targetGazeY = glance ? -11.0f : 0.0f;
                 }
+                targetTilt = glance ? targetGazeX * 0.38f : (choice >= 75 ? random(-4, 5) : 0);
+                targetSquint = glance && random(0, 3) == 0 ? 0.22f : 0.0f;
             }
+        }
+        const float dt = min(64UL, (unsigned long)(now - motionUpdated));
+        const float blend = dt / (70.0f + dt);
+        motionUpdated = now;
+        gazeX += (targetGazeX - gazeX) * blend;
+        gazeY += (targetGazeY - gazeY) * blend;
+        gazeTilt += (targetTilt - gazeTilt) * blend;
+        gazeSquint += (targetSquint - gazeSquint) * blend;
+        if (!visible) {
+            for (auto& particle : faceParticles) particle.kind = FaceParticleKind::None;
+            return;
+        }
+        const auto kind = particleKind(state, emotion);
+        if (emotionChanged || (int32_t)(now - nextParticle) >= 0) {
+            const int count = emotionChanged && state == STATE_IDLE ? 3 : 1;
+            for (int i = 0; i < count; ++i) spawnFaceParticle(kind, now);
+            nextParticle = now + random(490, 850);
+        }
+    }
 
-            float sw = clampf01(faceMorph.shameW.val);
-            if (sw > 0.10f) {
-                int bx = isLeft ? (ex + 10) : (ex + ew - 10);
-                canvas.fillEllipse(bx, centerY + 38, max(2, (int)(16.0f * sw)), max(1, (int)(8.0f * sw)), 0xF995);
-            }
-
-            float dw = clampf01(faceMorph.despairW.val);
-            if (dw > 0.10f) {
-                int rcx = ex + ew / 2;
-                int r1 = max(2, (int)(14.0f * dw));
-                int r2 = max(3, (int)(22.0f * dw));
-                canvas.drawCircle(rcx, centerY + 4, r1, TFT_BLACK);
-                canvas.drawCircle(rcx, centerY + 4, r2, TFT_BLACK);
-                int tearOff = (int)((now / 35) % 24);
-                int tx = isLeft ? (ex + 14) : (ex + ew - 14);
-                int tStep = isLeft ? tearOff : ((tearOff + 10) % 24);
-                canvas.fillCircle(tx, centerY + 28 + tStep, max(1, (int)(5.0f * dw)), 0x5E5F);
+    void drawFaceParticles(uint32_t now) {
+        for (const auto& p : faceParticles) {
+            const uint32_t age = now - p.born;
+            if (p.kind == FaceParticleKind::None || age >= p.life) continue;
+            const float fade = 1.0f - (float)age / p.life;
+            const int x = p.x + (int)(p.vx * (int32_t)age / 1000);
+            const int y = p.y + (int)(p.vy * (int32_t)age / 1000);
+            const int r = p.size;
+            switch (p.kind) {
+                case FaceParticleKind::Heart: {
+                    const auto c = packRgb565(255 * fade, 90 * fade, 175 * fade);
+                    canvas.fillCircle(x - r / 2, y, r / 2, c);
+                    canvas.fillCircle(x + r / 2, y, r / 2, c);
+                    canvas.fillTriangle(x - r, y, x + r, y, x, y + r, c);
+                    break;
+                }
+                case FaceParticleKind::Star:
+                case FaceParticleKind::Spark: {
+                    const bool star = p.kind == FaceParticleKind::Star;
+                    const auto c = packRgb565(255 * fade, (star ? 230 : 150) * fade,
+                                               (star ? 90 : 255) * fade);
+                    const float angle = age * 0.006f;
+                    const int dx = (int)roundf(r * cosf(angle)), dy = (int)roundf(r * sinf(angle));
+                    canvas.drawLine(x - dx, y - dy, x + dx, y + dy, c);
+                    canvas.drawLine(x - dy, y + dx, x + dy, y - dx, c);
+                    break;
+                }
+                case FaceParticleKind::Zzz: {
+                    const auto c = packRgb565(150 * fade, 210 * fade, 255 * fade);
+                    canvas.drawFastHLine(x - r, y - r, 2 * r, c);
+                    canvas.drawLine(x + r - 1, y - r, x - r, y + r, c);
+                    canvas.drawFastHLine(x - r, y + r, 2 * r, c);
+                    break;
+                }
+                case FaceParticleKind::Sweat: case FaceParticleKind::Tear:
+                    canvas.fillEllipse(x, y, max(1, r / 2), r, packRgb565(85 * fade, 195 * fade, 255 * fade));
+                    break;
+                case FaceParticleKind::Bubble:
+                    canvas.drawCircle(x, y, r, packRgb565(160 * fade, 245 * fade, 80 * fade));
+                    break;
+                case FaceParticleKind::Dot:
+                    canvas.fillCircle(x, y, max(1, r / 2), packRgb565(200 * fade, 120 * fade, 255 * fade));
+                    break;
+                default: break;
             }
         }
     }
 
-    void drawMouthShapeMorph(MouthKey mk, int mouthX, int mouthY, float scale,
-                             uint16_t eyeColor, unsigned long now, int shakeX) {
-        if (scale < 0.15f) return;
-        auto sx = [scale](float d) -> int { return (int)roundf(d * scale); };
-        auto sw = [scale](float d) -> int { return max(1, (int)roundf(d * scale)); };
+    void drawExpressionDetails(FaceEmotion emotion, int lx, int rx, int ly, int ry, uint32_t now) {
+        const int cx = (lx + rx) / 2, cy = (ly + ry) / 2;
+        switch (emotion) {
+            case EMO_ANGEL:
+                canvas.drawEllipse(cx, cy - 58, 31, 8, 0xFEAA);
+                canvas.drawEllipse(cx, cy - 58, 30, 7, 0xFEAA);
+                break;
+            case EMO_COOL:
+                canvas.drawLine(lx, ly - 5, rx, ry - 5, 0x4414);
+                for (int i = 0; i < 2; ++i) {
+                    const int x = i ? rx : lx, y = i ? ry : ly;
+                    canvas.fillRoundRect(x - 39, y - 21, 78, 42, 9, 0x0884);
+                    canvas.drawRoundRect(x - 39, y - 21, 78, 42, 9, 0x4414);
+                    canvas.drawLine(x - 27, y + 5, x - 8, y - 12, 0x5476);
+                }
+                break;
+            case EMO_CRAZY:
+                for (int eye = 0; eye < 2; ++eye) {
+                    const int x = eye ? rx : lx, y = eye ? ry : ly;
+                    int px = x, py = y;
+                    const float phase = (now % 1050) * 0.005984f;
+                    for (int i = 1; i <= 24; ++i) {
+                        const float angle = (eye ? -1.0f : 1.0f) * (i * 0.46f + phase);
+                        const float radius = i * (eye ? 0.55f : 0.78f);
+                        const int nx = x + (int)roundf(radius * cosf(angle));
+                        const int ny = y + (int)roundf(radius * sinf(angle));
+                        canvas.drawLine(px, py, nx, ny, 0x40C7);
+                        px = nx; py = ny;
+                    }
+                }
+                break;
+            case EMO_LIAR: {
+                const float t = min(1.0f, (now - expressionStarted) / 650.0f);
+                const int length = 12 + (int)(36 * (2 * t - t * t));
+                canvas.drawLine(cx, cy + 45, cx + length, cy + 50, 0xFD4B);
+                canvas.drawLine(cx, cy + 46, cx + length, cy + 51, 0xFD4B);
+                canvas.drawLine(cx + length, cy + 50, cx + length - 9, cy + 55, 0xFD4B);
+                break;
+            }
+            default: break;
+        }
+    }
 
-        switch (mk) {
-            case MK_SPEAK: {
-                int openW = sw((float)(24 + ((now / 70) % 28)));
-                int openH = sw((float)(10 + ((now / 55) % 22)));
-                int rr = max(2, sw(8));
-                canvas.fillRoundRect(mouthX - openW / 2, mouthY - openH / 2, openW, openH, rr, eyeColor);
-                if (openW > 8 && openH > 8) {
-                    canvas.fillRoundRect(mouthX - openW / 2 + 3, mouthY - openH / 2 + 3, openW - 6, openH - 6, max(1, rr - 2), 0x3008);
-                    canvas.fillEllipse(mouthX, mouthY + openH / 4, max(2, openW / 3), max(1, openH / 4), 0xF98C);
+    void shiftFaceVertically(float shift) {
+        auto* pixels = static_cast<uint16_t*>(canvas.getBuffer());
+        const int offset = (int)floorf(shift);
+        const unsigned weight = (unsigned)roundf((shift - offset) * 16.0f);
+        const bool down = shift >= 0.0f;
+        constexpr uint32_t mask = 0x07E0F81F;
+        static const uint16_t emptyRow[FACE_SCREEN_W] = {};
+        constexpr size_t rowBytes = sizeof(emptyRow);
+        for (int row = 0; row < FACE_SCREEN_H; ++row) {
+            const int y = down ? FACE_SCREEN_H - 1 - row : row;
+            const int a = y - offset;
+            const int b = a - 1;
+            auto* dst = pixels + y * FACE_SCREEN_W;
+            const auto* rowA = a >= 0 && a < FACE_SCREEN_H ? pixels + a * FACE_SCREEN_W : emptyRow;
+            const auto* rowB = b >= 0 && b < FACE_SCREEN_H ? pixels + b * FACE_SCREEN_W : emptyRow;
+            if (weight == 0 || weight == 16 || memcmp(rowA, rowB, rowBytes) == 0) {
+                const auto* source = weight == 16 ? rowB : rowA;
+                if (source != dst) memcpy(dst, source, rowBytes);
+                continue;
+            }
+            for (int x = 0; x < FACE_SCREEN_W; ++x) {
+                const uint16_t p = rowA[x];
+                const uint16_t q = rowB[x];
+                if (p == q) {
+                    dst[x] = p;
+                    continue;
                 }
-                break;
-            }
-            case MK_LISTEN: {
-                int ph = sw(10.0f + 4.0f * fabsf(sinf((float)now * 0.008f)));
-                int pw = sw(32.0f);
-                canvas.fillRoundRect(mouthX - pw / 2, mouthY - ph / 2, pw, ph, max(2, sw(5)), eyeColor);
-                if (pw > 8 && ph > 6) {
-                    canvas.fillRoundRect(mouthX - pw / 2 + 3, mouthY - ph / 2 + 3, pw - 6, ph - 6, max(1, sw(3)), 0x3008);
-                }
-                break;
-            }
-            case MK_THINK: {
-                canvas.drawLine(mouthX + sx(-14), mouthY + sx(2), mouthX + sx(-4), mouthY + sx(-3), eyeColor);
-                canvas.drawLine(mouthX + sx(-4), mouthY + sx(-3), mouthX + sx(5), mouthY + sx(4), eyeColor);
-                canvas.drawLine(mouthX + sx(5), mouthY + sx(4), mouthX + sx(15), mouthY + sx(-1), eyeColor);
-                canvas.drawLine(mouthX + sx(-14), mouthY + sx(3), mouthX + sx(-4), mouthY + sx(-2), eyeColor);
-                break;
-            }
-            case MK_HAPPY_OPEN: {
-                int r = sw(22);
-                canvas.fillCircle(mouthX, mouthY + sx(-4), r, eyeColor);
-                canvas.fillRect(mouthX - r - 2, mouthY + sx(-28), (r + 2) * 2, max(2, sw(24)), TFT_BLACK);
-                canvas.fillEllipse(mouthX, mouthY + sx(8), sw(12), sw(6), 0xF98C);
-                break;
-            }
-            case MK_SURPRISED: {
-                canvas.fillCircle(mouthX, mouthY, sw(14), eyeColor);
-                int ir = (int)roundf(9.0f * scale);
-                if (ir > 1) canvas.fillCircle(mouthX, mouthY, ir, TFT_BLACK);
-                break;
-            }
-            case MK_SAD: {
-                canvas.drawLine(mouthX + sx(-18), mouthY + sx(7), mouthX, mouthY + sx(-4), eyeColor);
-                canvas.drawLine(mouthX, mouthY + sx(-4), mouthX + sx(18), mouthY + sx(7), eyeColor);
-                canvas.drawLine(mouthX + sx(-18), mouthY + sx(8), mouthX, mouthY + sx(-3), eyeColor);
-                canvas.drawLine(mouthX, mouthY + sx(-3), mouthX + sx(18), mouthY + sx(8), eyeColor);
-                break;
-            }
-            case MK_ANGRY: {
-                canvas.drawLine(mouthX + sx(-20), mouthY + sx(4), mouthX + sx(-7), mouthY + sx(-2), eyeColor);
-                canvas.drawLine(mouthX + sx(-7), mouthY + sx(-2), mouthX + sx(7), mouthY + sx(4), eyeColor);
-                canvas.drawLine(mouthX + sx(7), mouthY + sx(4), mouthX + sx(20), mouthY + sx(-2), eyeColor);
-                break;
-            }
-            case MK_FEAR: {
-                int fx = mouthX + shakeX;
-                int fw = sw(36), fh = sw(14);
-                canvas.fillRoundRect(fx - fw / 2, mouthY - fh / 2, fw, fh, max(2, sw(6)), eyeColor);
-                if (fw > 8 && fh > 6) {
-                    canvas.fillRoundRect(fx - fw / 2 + 3, mouthY - fh / 2 + 3, fw - 6, fh - 6, max(1, sw(4)), 0x3008);
-                    canvas.drawFastHLine(fx - sw(13), mouthY, sw(26), 0xFFFF);
-                    canvas.drawFastVLine(fx + sx(-4), mouthY - sw(3), sw(6), 0xFFFF);
-                    canvas.drawFastVLine(fx + sx(5), mouthY - sw(3), sw(6), 0xFFFF);
-                }
-                break;
-            }
-            case MK_DISGUST: {
-                canvas.drawLine(mouthX + sx(-18), mouthY + sx(2), mouthX + sx(-6), mouthY + sx(-5), eyeColor);
-                canvas.drawLine(mouthX + sx(-6), mouthY + sx(-5), mouthX + sx(6), mouthY + sx(4), eyeColor);
-                canvas.drawLine(mouthX + sx(6), mouthY + sx(4), mouthX + sx(18), mouthY + sx(-2), eyeColor);
-                canvas.drawLine(mouthX + sx(-18), mouthY + sx(3), mouthX + sx(-6), mouthY + sx(-4), eyeColor);
-                canvas.fillEllipse(mouthX + sx(10), mouthY + sx(8), sw(6), sw(8), 0xF98C);
-                break;
-            }
-            case MK_CONTEMPT: {
-                int mw = sw(22), mh = max(2, sw(4));
-                canvas.fillRoundRect(mouthX + sx(-16), mouthY + sx(2), mw, mh, max(1, mh / 2), eyeColor);
-                canvas.drawLine(mouthX + sx(5), mouthY + sx(3), mouthX + sx(19), mouthY + sx(-5), eyeColor);
-                canvas.drawLine(mouthX + sx(5), mouthY + sx(4), mouthX + sx(19), mouthY + sx(-4), eyeColor);
-                break;
-            }
-            case MK_SHAME: {
-                canvas.drawLine(mouthX + sx(-10), mouthY, mouthX + sx(-5), mouthY + sx(4), eyeColor);
-                canvas.drawLine(mouthX + sx(-5), mouthY + sx(4), mouthX, mouthY, eyeColor);
-                canvas.drawLine(mouthX, mouthY, mouthX + sx(5), mouthY + sx(4), eyeColor);
-                canvas.drawLine(mouthX + sx(5), mouthY + sx(4), mouthX + sx(10), mouthY, eyeColor);
-                break;
-            }
-            case MK_DESPAIR: {
-                int r1 = sw(20), r2 = sw(16);
-                int dx = mouthX + shakeX;
-                canvas.fillCircle(dx, mouthY + sx(12), r1, eyeColor);
-                if (r2 > 2) canvas.fillCircle(dx, mouthY + sx(12), r2, 0x3008);
-                canvas.fillRect(dx - r1 - 2, mouthY + sx(12), (r1 + 2) * 2, r1 + 2, TFT_BLACK);
-                canvas.fillEllipse(dx, mouthY + sx(8), sw(9), sw(4), 0xF98C);
-                break;
-            }
-            case MK_MALICE: {
-                int r1 = sw(22), r2 = sw(19);
-                canvas.fillCircle(mouthX, mouthY + sx(-6), r1, eyeColor);
-                canvas.fillRect(mouthX - r1 - 2, mouthY + sx(-28), (r1 + 2) * 2, max(2, sw(24)), TFT_BLACK);
-                if (r2 > 2) canvas.fillCircle(mouthX, mouthY + sx(-9), r2, TFT_BLACK);
-                canvas.fillTriangle(
-                    mouthX + sx(11), mouthY + sx(-1),
-                    mouthX + sx(16), mouthY + sx(-1),
-                    mouthX + sx(14), mouthY + sx(7),
-                    0xFFFF
-                );
-                break;
-            }
-            default: {
-                const int halfWidth = sw(23);
-                const int radius = max(1, sw(2));
-                for (int dx = -halfWidth; dx <= halfWidth; ++dx) {
-                    const float t = (float)dx / halfWidth;
-                    const int dy = (int)roundf(scale * (6.0f - 8.0f * t * t));
-                    canvas.fillCircle(mouthX + dx, mouthY + dy, radius, eyeColor);
-                }
-                break;
+                const uint32_t c = canvasNeedsByteSwap ? p : __builtin_bswap16(p);
+                const uint32_t d = canvasNeedsByteSwap ? q : __builtin_bswap16(q);
+                const uint32_t cSplit = (c | (c << 16)) & mask;
+                const uint32_t dSplit = (d | (d << 16)) & mask;
+                const uint32_t mixed = ((cSplit * (16 - weight) + dSplit * weight) >> 4) & mask;
+                const uint16_t rgb = mixed | (mixed >> 16);
+                dst[x] = canvasNeedsByteSwap ? rgb : __builtin_bswap16(rgb);
             }
         }
     }
+
+    void drawMouthShapeMorph(MouthKey key, int cx, int cy, float scale,
+                             uint16_t color, uint32_t now) {
+        if (scale < 0.15f || key == MK_SILENT) return;
+        if (key == MK_SPEAK) {
+            const int w = max(1, (int)roundf(speechWidth * 1.16f * scale));
+            const int h = max(1, (int)roundf(speechHeight * 1.16f * scale));
+            const int r = max(1, min(w, h) * 46 / 100);
+            canvas.fillRoundRect(cx - w / 2, cy - h / 2, w, h, r, color);
+            if (w > 8 && h > 8) {
+                canvas.fillRoundRect(cx - w / 2 + 3, cy - h / 2 + 3, w - 6, h - 6, max(1, r - 2), 0x2864);
+                canvas.fillEllipse(cx, cy + h / 6, max(2, w / 3), max(1, h / 5), 0xFB52);
+                if (h >= 13 && w >= 35) {
+                    canvas.fillRoundRect(cx - w / 4, cy - h / 2 + 3, w / 2, max(2, h / 5), 2, 0xF7DF);
+                }
+            }
+            return;
+        }
+
+        static_assert(sizeof(bench_face::mouths) / sizeof(bench_face::mouths[0]) == MK_LIAR + 1,
+                      "Bench mouths must match MouthKey");
+        const auto& asset = bench_face::mouths[static_cast<unsigned>(key)];
+        float scaleX = scale;
+        float scaleY = scale;
+        if (key == MK_LISTEN) {
+            scaleY *= 1.0f + 0.5f * fabsf(sinf((now % 305) * 0.0103f));
+        } else if (key == MK_SLEEPY) {
+            const float pulse = 1.0f + 0.30f * sinf((now % 1676) * 0.00375f);
+            scaleX *= pulse;
+            scaleY *= pulse;
+        } else if (key == MK_FEAR || key == MK_DESPAIR) {
+            cy += (int)roundf(sinf((now % 240) * 0.02618f));
+        }
+        const int left = (int)roundf(asset.x * scaleX);
+        const int top = (int)roundf(asset.y * scaleY);
+        const int width = max(1, (int)roundf(asset.width * scaleX));
+        const int height = max(1, (int)roundf(asset.height * scaleY));
+        const unsigned red = ((color >> 11) & 31) * 255 / 31;
+        const unsigned green = ((color >> 5) & 63) * 255 / 63;
+        const unsigned blue = (color & 31) * 255 / 31;
+        auto* buffer = static_cast<uint16_t*>(canvas.getBuffer());
+        for (int y = max(0, cy + top); y < min(FACE_SCREEN_H, cy + top + height); ++y) {
+            const auto* row = asset.pixels + ((y - cy - top) * asset.height / height) * asset.width;
+            for (int x = max(0, cx + left); x < min(FACE_SCREEN_W, cx + left + width); ++x) {
+                const uint32_t pixel = row[(x - cx - left) * asset.width / width];
+                if (pixel == 0) continue;
+                const unsigned tint = pixel >> 24;
+                const unsigned r = ((pixel >> 16) & 255) + (red * tint + 127) / 255;
+                const unsigned g = ((pixel >> 8) & 255) + (green * tint + 127) / 255;
+                const unsigned b = (pixel & 255) + (blue * tint + 127) / 255;
+                const uint16_t rgb = ((min(r, 255U) & 248) << 8) |
+                                     ((min(g, 255U) & 252) << 3) | (min(b, 255U) >> 3);
+                buffer[y * FACE_SCREEN_W + x] = canvasNeedsByteSwap ? rgb : __builtin_bswap16(rgb);
+            }
+        }
+    }
+
 #endif
 
 public:
-    void begin() {
+    void begin(uint8_t brightness = TFT_AWAKE_BRIGHTNESS) {
         if (!stateMux) {
             stateMux = xSemaphoreCreateMutex();
         }
@@ -1047,7 +1257,7 @@ public:
         rawWriteCmd(0x20);
 
         ledcSetup(backlightChannel, 12000, 8);
-        setBrightness(TFT_AWAKE_BRIGHTNESS);
+        setBrightness(brightness);
         canvas.setColorDepth(16);
         canvas.setPsram(true);
         canvas.setSwapBytes(true);
@@ -1071,7 +1281,23 @@ public:
 #endif
     }
 
-    void setState(RobotState s) { currentState = s; }
+    void setState(RobotState s) {
+        lockState();
+        currentState = s;
+        if (s != STATE_SPEAK) lipSampleValid = false;
+        unlockState();
+    }
+
+    void setLipSync(float amp, float zcr) {
+        lockState();
+        if (currentState == STATE_SPEAK) {
+            lipAmp = amp;
+            lipZcr = zcr;
+            lipSampleMs = millis();
+            lipSampleValid = true;
+        }
+        unlockState();
+    }
     void setEmotion(FaceEmotion e) { currentEmotion = e; }
     void setSubtitle(const String& text) { (void)text; } // Tela 100% pura: sem legenda escrita na tela
     void setNetBadge(const String& badge) { lockState(); netBadge = badge; unlockState(); }
@@ -1234,8 +1460,20 @@ public:
         unlockState();
     }
 
+    bool isPhysicalDisplayReady() const {
+#if ENABLE_PHYSICAL_DISPLAY
+        return spriteReady;
+#else
+        return false;
+#endif
+    }
+    uint8_t getRotation() const { return currentRotation; }
+    uint8_t getBrightness() const { return currentBrightness; }
+    bool isInverted() const { return currentInversion; }
+
     void setBrightness(uint8_t level) {
 #if ENABLE_PHYSICAL_DISPLAY
+        currentBrightness = level;
         if (level == 255) {
             if (backlightPwmAttached) {
                 ledcDetachPin(PIN_TFT_BLK);
@@ -1273,6 +1511,7 @@ public:
         if (!spriteReady) return;
         xSemaphoreTake(tftMux, portMAX_DELAY);
         rawWriteCmd(inv ? 0x21 : 0x20);
+        currentInversion = inv;
         xSemaphoreGive(tftMux);
 #else
         (void)inv;
@@ -1296,15 +1535,23 @@ public:
         if (!isBlinking && (now - lastBlink > 3800)) {
             isBlinking = true;
             lastBlink = now;
-        } else if (isBlinking && (now - lastBlink > 140)) {
+        } else if (isBlinking && (now - lastBlink >= 112)) {
             isBlinking = false;
             lastBlink = now;
         }
 
-        faceMorph.step(currentState, currentEmotion, now, isBlinking);
+        lockState();
+        const RobotState state = currentState;
+        const bool liveLipSync = lipSampleValid && (uint32_t)(now - lipSampleMs) < 140;
+        const float amp = liveLipSync ? lipAmp : 0.0f;
+        const float zcr = liveLipSync ? lipZcr : 0.0f;
+        unlockState();
+        const FaceEmotion emotion = currentEmotion;
+        faceMorph.step(state, emotion, now);
 
 #if ENABLE_PHYSICAL_DISPLAY
         if (!spriteReady) return;
+        updateSpeechMouth(state, now, liveLipSync, amp, zcr);
         DisplayWidgetType curW = WIDGET_NONE;
         unsigned long wUntil = 0, wDur = WIDGET_DEFAULT_DURATION_MS;
         bool dClock = false, aRing = false;
@@ -1334,7 +1581,10 @@ public:
         pcAct = pcAction; pcPrm = pcParam; badge = netBadge;
         unlockState();
 
+        updateFaceMotion(state, emotion, now, curW == WIDGET_NONE && !dClock);
+
         xSemaphoreTake(tftMux, portMAX_DELAY);
+        const uint32_t drawStartUs = micros();
         canvas.startWrite();
         canvas.fillScreen(TFT_BLACK);
 
@@ -1353,46 +1603,58 @@ public:
         }
 
         uint16_t eyeColor = faceMorph.packColor();
-        int eyeW   = max(20, (int)roundf(faceMorph.eyeW.val));
-        int leftH  = max(4,  (int)roundf(faceMorph.leftH.val));
-        int rightH = max(4,  (int)roundf(faceMorph.rightH.val));
+        drawFaceParticles(now);
+        const float blink = isBlinking && emotion != EMO_SLEEPY
+            ? sinf((now - lastBlink) * (PI / 112.0f)) : 0.0f;
+        const float openness = 1.0f - blink * 0.94f;
+        int eyeW = max(20, (int)roundf(faceMorph.eyeW.val * (1.0f + 0.16f * blink)));
+        int leftH = max(4, (int)roundf(faceMorph.leftH.val * openness));
+        int rightH = max(4, (int)roundf(faceMorph.rightH.val * openness * (1.0f - gazeSquint)));
 
         int shakeAmp = (int)roundf(faceMorph.shakeAmp.val);
         int shakeX = (shakeAmp > 0) ? (((int)((now / 42) % 3) - 1) * shakeAmp) : 0;
 
-        int offX = (int)roundf(faceMorph.offX.val);
-        int offY = (int)roundf(faceMorph.offY.val);
-        const int breathY = (int)roundf(sinf(now * 0.0024f) * 2.55f);
+        int offX = (int)roundf(faceMorph.offX.val + gazeX);
+        int offY = (int)roundf(faceMorph.offY.val + gazeY);
+        const float breathY = sinf((now % 2618) * 0.0024f) * 2.55f;
         const int leftW = max(20, eyeW - eyeW * offX / 151);
         const int rightW = max(20, eyeW + eyeW * offX / 151);
         const int leftX = 85 - leftW / 2 + offX + shakeX;
         const int rightX = 211 - rightW / 2 + offX + shakeX;
-        const int centerY = 96 + offY + breathY;
+        const int centerY = 96 + offY;
+        const int tiltY = (int)roundf(63.0f * sinf((faceMorph.tilt.val + gazeTilt) * (PI / 180.0f)));
 
         // 1. Olhos Cozmo/Eilik com Morph Contínuo
-        drawSingleEyeMorph(leftX, centerY, leftW, leftH, true, eyeColor, shakeX, now);
-        drawSingleEyeMorph(rightX, centerY, rightW, rightH, false, eyeColor, shakeX, now);
+        drawSingleEyeMorph(leftX, centerY - tiltY, leftW, leftH, true, shakeX, now);
+        drawSingleEyeMorph(rightX, centerY + tiltY, rightW, rightH, false, shakeX, now);
 
         // 2. Boca Expressiva Eilik/BMO com Morph Elástico + LipSync (y = 166)
         int mouthX = FACE_SCREEN_W / 2 + (int)roundf(offX * 0.45f);
-        int mouthY = 170 + breathY + (int)roundf(offY * 0.35f);
+        int mouthY = 170 + (int)roundf(offY * 0.35f);
+        const uint32_t gestureAge = now - gestureStarted;
+        const float mouthPulse = state == STATE_IDLE && gestureAge < 480
+            ? sinf(gestureAge * (PI / 480.0f)) : 0.0f;
+        const float mouthScale = 1.0f + (emotion == EMO_BORED ? 0.22f : 0.10f) * mouthPulse;
         if (faceMorph.mouthT >= 0.999f || faceMorph.prevMouth == faceMorph.currMouth) {
-            drawMouthShapeMorph(faceMorph.currMouth, mouthX, mouthY, 1.0f, eyeColor, now, shakeX);
+            drawMouthShapeMorph(faceMorph.currMouth, mouthX, mouthY, mouthScale, eyeColor, now);
         } else if (faceMorph.mouthT < 0.40f) {
             float sc = 1.0f - (faceMorph.mouthT / 0.40f) * 0.72f;
-            drawMouthShapeMorph(faceMorph.prevMouth, mouthX, mouthY, sc, eyeColor, now, shakeX);
+            drawMouthShapeMorph(faceMorph.prevMouth, mouthX, mouthY, sc, eyeColor, now);
         } else {
             float u = (faceMorph.mouthT - 0.40f) / 0.60f;
             float sc = max(0.25f, min(1.15f, 0.28f + 0.72f * easeOutBackF(u)));
-            drawMouthShapeMorph(faceMorph.currMouth, mouthX, mouthY, sc, eyeColor, now, shakeX);
+            drawMouthShapeMorph(faceMorph.currMouth, mouthX, mouthY, sc, eyeColor, now);
         }
 
         // 3. Pílula discreta no topo (apenas se Pomodoro, Timer ou AP/OFFLINE ativos)
+        drawExpressionDetails(emotion, leftX + leftW / 2, rightX + rightW / 2,
+                              centerY - tiltY, centerY + tiltY, now);
+        shiftFaceVertically(breathY);
         drawTopPill(now, hasPomo, isFocus, pRem, pTot, hasTmr, tRem, tTot, badge);
 
         canvas.endWrite();
         const uint32_t transferStartUs = micros();
-        pushCanvasViaSpi();
+        pushCanvasViaSpi(true);
         xSemaphoreGive(tftMux);
         constexpr uint8_t sampleFrames = 16;
         if (timedEyeFrames < sampleFrames) {
@@ -1402,12 +1664,14 @@ public:
                 Serial.println("EVT:LOG=TFT primeiro frame dos olhos enviado");
             } else {
                 eyeTransferUs += transferEndUs - transferStartUs;
+                eyeDrawUs += transferStartUs - drawStartUs;
             }
             if (++timedEyeFrames == sampleFrames) {
                 const uint32_t elapsedUs = transferEndUs - eyeTimingStartUs;
-                Serial.printf("EVT:LOG=TFT olhos FPS=%.1f flush_medio_ms=%.1f\n",
+                Serial.printf("EVT:LOG=TFT olhos FPS=%.1f flush_medio_ms=%.1f desenho_medio_ms=%.1f\n",
                               (sampleFrames - 1) * 1000000.0 / elapsedUs,
-                              eyeTransferUs / ((sampleFrames - 1) * 1000.0));
+                              eyeTransferUs / ((sampleFrames - 1) * 1000.0),
+                              eyeDrawUs / ((sampleFrames - 1) * 1000.0));
             }
         }
 #else

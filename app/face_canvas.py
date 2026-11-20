@@ -80,15 +80,16 @@ EMOTION_POSES = {
         gaze_y=-4.0, tilt=-3.0, squash_imp=0.24
     ),
     "DISGUST": _pose(
-        w_scale=1.02, lh_scale=0.72 * 0.78, rh_scale=0.72,
-        l_top_l=0.12, l_top_r=0.42, r_top_l=0.42, r_top_r=0.16,
-        l_bot_l=0.05, l_bot_r=0.32, r_bot_l=0.24, r_bot_r=0.04,
-        gaze_x=-7.0, gaze_y=-3.0, tilt=6.5, squash_imp=-0.06
+        w_scale=0.94, lh_scale=0.50, rh_scale=0.81,
+        l_top_l=0.18, l_top_r=0.42, r_top_l=0.12, r_top_r=0.25,
+        l_bot_l=0.10, l_bot_r=0.24, r_bot_l=0.20, r_bot_r=0.08,
+        gaze_x=-9.0, gaze_y=-4.0, tilt=3.5, squash_imp=-0.06
     ),
     "CONTEMPT": _pose(
-        w_scale=1.02, lh_scale=0.85, rh_scale=0.85,
-        l_top_l=0.48, l_top_r=0.48, r_top_l=0.44, r_top_r=0.18,
-        gaze_x=11.0, gaze_y=-2.0, tilt=-5.0, squash_imp=-0.05
+        w_scale=1.00, lh_scale=0.92, rh_scale=0.72,
+        l_top_l=0.42, l_top_r=0.27, r_top_l=0.47, r_top_r=0.47,
+        l_bot_l=0.02, l_bot_r=0.04, r_bot_l=0.06, r_bot_r=0.06,
+        gaze_x=13.0, gaze_y=-1.0, tilt=-3.0, squash_imp=-0.05
     ),
     "SHAME": _pose(
         w_scale=0.90, lh_scale=0.80, rh_scale=0.80,
@@ -108,6 +109,15 @@ EMOTION_POSES = {
         l_top_l=0.08, l_top_r=0.44, r_top_l=0.44, r_top_r=0.08,
         bot_arc=0.7619, gaze_x=8.0, gaze_y=-3.0, tilt=-7.5, squash_imp=0.10
     ),
+    "CURIOUS": _pose(lh_scale=1.12, rh_scale=0.79, gaze_x=10.0, gaze_y=-4.0, tilt=-5.0, allow_idle_gaze=True),
+    "BORED": _pose(lh_scale=0.58, rh_scale=0.54, l_top_l=0.28, l_top_r=0.30,
+                    r_top_l=0.30, r_top_r=0.26, gaze_y=-8.0, tilt=3.0, allow_idle_gaze=True),
+    "SILENT": _pose(w_scale=0.92, lh_scale=0.96, rh_scale=0.96),
+    "ANGEL": _pose(bot_arc=0.82, blush_alpha=0.6, tilt=-2.0, allow_idle_gaze=True),
+    "COOL": _pose(lh_scale=0.82, rh_scale=0.82, gaze_x=5.0, tilt=-6.0),
+    "CRAZY": _pose(w_scale=0.90, lh_scale=1.16, rh_scale=0.82, tilt=6.0, shake_amp=1.4),
+    "LIAR": _pose(lh_scale=0.82, rh_scale=0.92, gaze_x=-12.0, gaze_y=-3.0, tilt=4.0),
+
 }
 
 
@@ -222,6 +232,7 @@ class FaceCanvas296x240(QWidget):
 
         # Comportamento Autônomo em IDLE
         self.next_idle_action_time = time.time() + 2.2
+        self.expression_started = time.monotonic()
         self.idle_curious_squint = 0.0
 
         # LipSync estritamente acoplado ao áudio real
@@ -395,7 +406,8 @@ class FaceCanvas296x240(QWidget):
             return "HAPPY_OPEN"
         if self.emotion in (
             "SURPRISED", "SAD", "ANGRY", "WINK", "SLEEPY",
-            "FEAR", "DISGUST", "CONTEMPT", "SHAME", "DESPAIR", "MALICE"
+            "FEAR", "DISGUST", "CONTEMPT", "SHAME", "DESPAIR", "MALICE",
+            "CURIOUS", "BORED", "SILENT", "ANGEL", "COOL", "CRAZY", "LIAR"
         ):
             return self.emotion
         return "NEUTRAL"
@@ -445,6 +457,9 @@ class FaceCanvas296x240(QWidget):
         self.mouth_trans_t = 1.0
 
     def trigger_emotion_impulse(self, emotion: str):
+        self.expression_started = time.monotonic()
+        if emotion in ("ANGEL", "CRAZY"):
+            self._spawn_particles("star", 5)
         self.emotion = emotion
         self._apply_emotion_pose(emotion, impulse=True)
         if emotion == "HAPPY":
@@ -495,7 +510,7 @@ class FaceCanvas296x240(QWidget):
         self.last_audio_frame_ts = time.time()
 
     def _spawn_particles(self, ptype: str, count: int):
-        for _ in range(count):
+        for _ in range(min(count, max(0, 8 - len(self.particles)))):
             self.particles.append({
                 "type": ptype,
                 "x": random.uniform(35, 260),
@@ -717,6 +732,20 @@ class FaceCanvas296x240(QWidget):
             return QColor(115, 115, 255)
         if self.emotion == "MALICE":
             return QColor(195, 70, 255)
+        if self.emotion == "CURIOUS":
+            return QColor(65, 214, 255)
+        if self.emotion == "BORED":
+            return QColor(146, 158, 220)
+        if self.emotion == "SILENT":
+            return QColor(132, 222, 211)
+        if self.emotion == "ANGEL":
+            return QColor(255, 219, 115)
+        if self.emotion == "COOL":
+            return QColor(64, 200, 255)
+        if self.emotion == "CRAZY":
+            return QColor(255, 128, 92)
+        if self.emotion == "LIAR":
+            return QColor(255, 170, 90)
         return QColor(0, 238, 255)
 
     def get_face_color(self) -> QColor:
@@ -812,6 +841,8 @@ class FaceCanvas296x240(QWidget):
         mouth_cy = 152.0 + gy * 0.35 + breath_y
         self._draw_expressive_mouth(painter, mouth_cx, mouth_cy, face_color)
 
+        self._draw_expression_details(painter, left_cx, right_cx, eye_cy)
+
         painter.restore()
 
         # 5. Partículas Flutuantes (sempre ATRÁS dos cards para não poluir a leitura)
@@ -849,6 +880,35 @@ class FaceCanvas296x240(QWidget):
                 self.telemetry,
                 self.anim_tick
             )
+
+    def _draw_expression_details(self, painter, lx, rx, y):
+        cx = (lx + rx) / 2
+        age = min(1.0, (time.monotonic() - self.expression_started) / 0.65)
+        if self.emotion == "ANGEL":
+            painter.setBrush(Qt.NoBrush)
+            painter.setPen(QPen(QColor(255, 215, 85), 3.0))
+            painter.drawEllipse(QPointF(cx, y - 50), 27, 7)
+        elif self.emotion == "COOL":
+            painter.setPen(QPen(QColor(65, 130, 165), 2.0))
+            painter.setBrush(QColor(8, 18, 34))
+            painter.drawLine(QPointF(lx, y - 4), QPointF(rx, y - 4))
+            for x in (lx, rx):
+                painter.drawRoundedRect(QRectF(x - 34, y - 18, 68, 36), 8, 8)
+                painter.drawLine(QPointF(x - 23, y + 5), QPointF(x - 7, y - 10))
+        elif self.emotion == "CRAZY":
+            painter.setPen(QPen(QColor(67, 24, 52), 2.6, Qt.SolidLine, Qt.RoundCap))
+            for x, radius, direction in ((lx, 21, 1), (rx, 16, -1)):
+                spiral = QPainterPath(QPointF(x, y))
+                for i in range(1, 29):
+                    angle = direction * i * 0.39 + self.anim_tick * direction
+                    r = radius * i / 28
+                    spiral.lineTo(x + math.cos(angle) * r, y + math.sin(angle) * r)
+                painter.drawPath(spiral)
+        elif self.emotion == "LIAR":
+            length = 10 + 31 * ease_out_quad(age)
+            painter.setPen(QPen(QColor(255, 170, 90), 3.0, Qt.SolidLine, Qt.RoundCap))
+            painter.drawLine(QPointF(cx, y + 39), QPointF(cx + length, y + 43))
+            painter.drawLine(QPointF(cx + length, y + 43), QPointF(cx + length - 8, y + 47))
 
     def _draw_blush_cheeks(self, painter: QPainter, lx: float, rx: float, cy: float,
                            intensity: float = 1.0, alpha_weight: float = 1.0):
@@ -1224,34 +1284,40 @@ class FaceCanvas296x240(QWidget):
             painter.drawPath(m_clip)
 
         elif mouth_key == "DISGUST":
-            path = QPainterPath()
-            path.moveTo(cx - 22, cy + 4)
-            path.cubicTo(cx - 10, cy - 9, cx - 2, cy - 7, cx + 2, cy + 1)
-            path.cubicTo(cx + 8, cy + 9, cx + 16, cy + 8, cx + 23, cy - 3)
-            painter.setPen(QPen(color, 3.2, Qt.SolidLine, Qt.RoundCap))
-            painter.setBrush(Qt.NoBrush)
-            painter.drawPath(path)
+            grimace = QPainterPath()
+            grimace.moveTo(cx - 21, cy + 2)
+            grimace.cubicTo(cx - 13, cy - 11, cx - 5, cy - 9, cx + 2, cy)
+            grimace.quadTo(cx + 9, cy + 8, cx + 21, cy - 1)
+            grimace.quadTo(cx + 12, cy + 12, cx + 3, cy + 9)
+            grimace.cubicTo(cx - 6, cy + 5, cx - 9, cy - 3, cx - 21, cy + 2)
+            grimace.closeSubpath()
+            painter.setPen(QPen(color, 2.8, Qt.SolidLine, Qt.RoundCap, Qt.RoundJoin))
+            painter.setBrush(QBrush(mouth_inner_bg))
+            painter.drawPath(grimace)
 
             tongue = QPainterPath()
-            tongue.moveTo(cx + 3, cy + 2)
-            tongue.cubicTo(cx + 3, cy + 15, cx + 16, cy + 16, cx + 17, cy + 1)
+            tongue.moveTo(cx + 3, cy + 7)
+            tongue.quadTo(cx + 8, cy + 9, cx + 14, cy + 6)
+            tongue.cubicTo(cx + 13, cy + 16, cx + 6, cy + 17, cx + 3, cy + 7)
             tongue.closeSubpath()
             painter.setPen(QPen(color, 1.8))
             painter.setBrush(QBrush(tongue_color))
             painter.drawPath(tongue)
-            painter.setPen(QPen(mouth_inner_bg, 1.3, Qt.SolidLine, Qt.RoundCap))
-            painter.drawLine(QPointF(cx + 10, cy + 4), QPointF(cx + 10, cy + 10))
+            painter.setPen(QPen(mouth_inner_bg, 1.2, Qt.SolidLine, Qt.RoundCap))
+            painter.drawLine(QPointF(cx + 9, cy + 9), QPointF(cx + 8, cy + 13))
 
         elif mouth_key == "CONTEMPT":
-            path = QPainterPath()
-            path.moveTo(cx - 19, cy + 4)
-            path.lineTo(cx + 2, cy + 4)
-            path.quadTo(cx + 14, cy + 4, cx + 21, cy - 5)
-            painter.setPen(QPen(color, 3.3, Qt.SolidLine, Qt.RoundCap))
+            smirk = QPainterPath()
+            smirk.moveTo(cx - 18, cy + 3)
+            smirk.cubicTo(cx - 6, cy + 6, cx + 12, cy + 6, cx + 22, cy - 7)
+            smirk.cubicTo(cx + 15, cy + 10, cx + 1, cy + 12, cx - 18, cy + 3)
+            smirk.closeSubpath()
+            painter.setPen(QPen(color, 2.8, Qt.SolidLine, Qt.RoundCap, Qt.RoundJoin))
+            painter.setBrush(QBrush(mouth_inner_bg))
+            painter.drawPath(smirk)
             painter.setBrush(Qt.NoBrush)
-            painter.drawPath(path)
-            painter.setPen(QPen(color, 2.2, Qt.SolidLine, Qt.RoundCap))
-            painter.drawLine(QPointF(cx + 19, cy - 7), QPointF(cx + 24, cy - 3))
+            painter.setPen(QPen(color, 2.0, Qt.SolidLine, Qt.RoundCap))
+            painter.drawLine(QPointF(cx + 19, cy - 8), QPointF(cx + 24, cy - 5))
 
         elif mouth_key == "SHAME":
             path = QPainterPath()
@@ -1301,6 +1367,29 @@ class FaceCanvas296x240(QWidget):
             painter.drawPath(fang)
             painter.restore()
             painter.setPen(QPen(color, 2.6, Qt.SolidLine, Qt.RoundCap, Qt.RoundJoin))
+            painter.setBrush(Qt.NoBrush)
+            painter.drawPath(path)
+
+        elif mouth_key == "SILENT":
+            return
+
+        elif mouth_key == "CURIOUS":
+            painter.setPen(QPen(color, 2.6))
+            painter.setBrush(QBrush(mouth_inner_bg))
+            painter.drawEllipse(QPointF(cx + 3, cy), 6.5, 7.5)
+
+        elif mouth_key in ("BORED", "ANGEL", "COOL", "CRAZY", "LIAR"):
+            curves = {
+                "BORED": (-17, 2, 5, -3, 19, 5),
+                "ANGEL": (-14, -1, 0, 13, 14, -1),
+                "COOL": (-16, 3, 4, 10, 21, -6),
+                "CRAZY": (-20, 0, -5, 19, 13, -5),
+                "LIAR": (-17, 3, 0, -9, 15, 4),
+            }
+            x0, y0, x1, y1, x2, y2 = curves[mouth_key]
+            path = QPainterPath(QPointF(cx + x0, cy + y0))
+            path.quadTo(cx + x1, cy + y1, cx + x2, cy + y2)
+            painter.setPen(QPen(color, 3.3, Qt.SolidLine, Qt.RoundCap))
             painter.setBrush(Qt.NoBrush)
             painter.drawPath(path)
 

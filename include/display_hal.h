@@ -422,11 +422,14 @@ private:
             if (right < 0) return;
         }
 
+        // Compensate for the panel's horizontal mirror in canvas coordinates.
+        const int outputLeft = FACE_SCREEN_W - 1 - right;
+        const int outputRight = FACE_SCREEN_W - 1 - left;
         const bool landscape = currentRotation & 1;
-        const int x0 = landscape ? left : FACE_SCREEN_H - 1 - bottom;
-        const int x1 = landscape ? right : FACE_SCREEN_H - 1 - top;
-        const int y0 = landscape ? top : left;
-        const int y1 = landscape ? bottom : right;
+        const int x0 = landscape ? outputLeft : FACE_SCREEN_H - 1 - bottom;
+        const int x1 = landscape ? outputRight : FACE_SCREEN_H - 1 - top;
+        const int y0 = landscape ? top : outputLeft;
+        const int y1 = landscape ? bottom : outputRight;
         setAddressRange(0x2A, x0, x1);
         setAddressRange(0x2B, y0, y1);
         beginCommand(PIN_TFT_DC, PIN_TFT_CS, 0x2C, SPI_MODE0, framebufferSpiHz);
@@ -434,9 +437,9 @@ private:
         size_t used = 0;
         for (int y = y0; y <= y1; ++y) {
             const uint16_t* pixel = landscape
-                ? pixels + y * FACE_SCREEN_W + x0
-                : pixels + (FACE_SCREEN_H - 1 - x0) * FACE_SCREEN_W + y;
-            const int step = landscape ? 1 : -FACE_SCREEN_W;
+                ? pixels + y * FACE_SCREEN_W + right
+                : pixels + (FACE_SCREEN_H - 1 - x0) * FACE_SCREEN_W + (FACE_SCREEN_W - 1 - y);
+            const int step = landscape ? -1 : -FACE_SCREEN_W;
             for (int x = x0; x <= x1; ++x) {
                 const uint16_t value = pixel[(x - x0) * step];
                 const uint16_t wire = canvasNeedsByteSwap ? __builtin_bswap16(value) : value;

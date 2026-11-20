@@ -10,59 +10,9 @@
 #include "robot_types.h"
 
 #if ENABLE_PHYSICAL_DISPLAY
+#include <SPI.h>
 #define LGFX_USE_V1
 #include <LovyanGFX.hpp>
-
-// Driver configurado para Estardyn 2.01" TFT LCD 240x296 (Controlador JD9853 SPI 8 Pinos)
-class LGFX_Estardyn_JD9853 : public lgfx::LGFX_Device {
-    lgfx::Panel_ST7789 _panel_instance;
-    lgfx::Bus_SPI      _bus_instance;
-    lgfx::Light_PWM    _light_instance;
-
-public:
-    LGFX_Estardyn_JD9853(void) {
-        {
-            auto cfg = _bus_instance.config();
-            cfg.spi_host   = SPI2_HOST;
-            cfg.spi_mode   = 0;
-            cfg.freq_write = 40000000;
-            cfg.freq_read  = 16000000;
-            cfg.spi_3wire  = false;
-            cfg.use_lock   = true;
-            cfg.dma_channel = SPI_DMA_CH_AUTO;
-            cfg.pin_sclk   = PIN_TFT_SCK;
-            cfg.pin_mosi   = PIN_TFT_MOSI;
-            cfg.pin_miso   = -1;
-            cfg.pin_dc     = PIN_TFT_DC;
-            _bus_instance.config(cfg);
-            _panel_instance.setBus(&_bus_instance);
-        }
-        {
-            auto cfg = _panel_instance.config();
-            cfg.pin_cs           = PIN_TFT_CS;
-            cfg.pin_rst          = PIN_TFT_RES;
-            cfg.pin_busy         = -1;
-            cfg.panel_width      = TFT_NATIVE_WIDTH;   // 240
-            cfg.panel_height     = TFT_NATIVE_HEIGHT;  // 296
-            cfg.offset_x         = 0;
-            cfg.offset_y         = 0;
-            cfg.offset_rotation  = 0;
-            cfg.invert           = true;
-            cfg.rgb_order        = false;
-            _panel_instance.config(cfg);
-        }
-        {
-            auto cfg = _light_instance.config();
-            cfg.pin_bl      = PIN_TFT_BLK;
-            cfg.invert      = false;
-            cfg.freq        = 12000;
-            cfg.pwm_channel = 7;
-            _light_instance.config(cfg);
-            _panel_instance.setLight(&_light_instance);
-        }
-        setPanel(&_panel_instance);
-    }
-};
 #endif
 
 struct SpringF {
@@ -138,8 +88,8 @@ struct FaceMorphEngine {
     float mouthT = 1.0f;
 
     FaceMorphEngine() {
-        colR.init(0.0f); colG.init(190.0f); colB.init(255.0f);
-        eyeW.init(68.0f); leftH.init(74.0f); rightH.init(74.0f);
+        colR.init(0.0f); colG.init(238.0f); colB.init(255.0f);
+        eyeW.init(76.0f); leftH.init(81.0f); rightH.init(81.0f);
         offX.init(0.0f); offY.init(0.0f); shakeAmp.init(0.0f);
         lTopL.init(0.0f); lTopR.init(0.0f); rTopL.init(0.0f); rTopR.init(0.0f);
         lBotL.init(0.0f); lBotR.init(0.0f); rBotL.init(0.0f); rBotR.init(0.0f);
@@ -173,26 +123,27 @@ struct FaceMorphEngine {
         // 1. Alvo de cor RGB888 para fusão suave
         float tr = 0.0f, tg = 190.0f, tb = 255.0f;
         if (st == STATE_LISTEN) {
-            tr = 0.0f; tg = 255.0f; tb = 0.0f;
+            tr = 0.0f; tg = 250.0f; tb = 145.0f;
         } else if (st == STATE_THINK) {
-            tr = 188.0f + 45.0f * sinf((float)now * 0.0055f);
-            tg = 50.0f;
+            tr = 185.0f + 60.0f * sinf((float)now * 0.0055f);
+            tg = 95.0f;
             tb = 255.0f;
         } else if (st == STATE_ALERT) {
             tr = 255.0f;
-            tg = 140.0f + 55.0f * sinf((float)now * 0.012f);
+            tg = ((now / 333) & 1) ? 220.0f : 125.0f;
             tb = 0.0f;
         } else {
             switch (emo) {
-                case EMO_ANGRY:    tr = 255.0f; tg = 0.0f;   tb = 0.0f;   break;
-                case EMO_LOVE:     tr = 255.0f; tg = 0.0f;   tb = 255.0f; break;
+                case EMO_ANGRY:    tr = 255.0f; tg = 55.0f;  tb = 75.0f;   break;
+                case EMO_LOVE:     tr = 255.0f; tg = 90.0f;  tb = 190.0f; break;
+                case EMO_SAD:      tr = 85.0f;  tg = 165.0f; tb = 255.0f; break;
                 case EMO_FEAR:     tr = 148.0f; tg = 212.0f; tb = 255.0f; break;
                 case EMO_DISGUST:  tr = 148.0f; tg = 232.0f; tb = 64.0f;  break;
                 case EMO_CONTEMPT: tr = 154.0f; tg = 174.0f; tb = 228.0f; break;
                 case EMO_SHAME:    tr = 255.0f; tg = 154.0f; tb = 186.0f; break;
                 case EMO_DESPAIR:  tr = 114.0f; tg = 114.0f; tb = 255.0f; break;
                 case EMO_MALICE:   tr = 194.0f; tg = 70.0f;  tb = 255.0f; break;
-                default:           tr = 0.0f;   tg = 190.0f; tb = 255.0f; break;
+                default:           tr = 0.0f;   tg = 238.0f; tb = 255.0f; break;
             }
         }
         colR.target = tr; colG.target = tg; colB.target = tb;
@@ -201,7 +152,7 @@ struct FaceMorphEngine {
         colB.step(0.14f, 0.78f);
 
         // 2. Alvos de geometria e pálpebras por emoção
-        float tw = 68.0f, tlh = 74.0f, trh = 74.0f;
+        float tw = 76.0f, tlh = 81.0f, trh = 81.0f;
         float tox = 0.0f, toy = 0.0f, tshk = 0.0f;
         float tl1 = 0.0f, tl2 = 0.0f, tr1 = 0.0f, tr2 = 0.0f;
         float bl1 = 0.0f, bl2 = 0.0f, br1 = 0.0f, br2 = 0.0f;
@@ -221,42 +172,42 @@ struct FaceMorphEngine {
                 tshk = 1.5f;
                 break;
             case EMO_SURPRISED:
-                tlh = 84.0f; trh = 84.0f;
+                tw = 82.0f; tlh = 91.0f; trh = 91.0f;
                 break;
             case EMO_WINK:
                 trh = 6.0f;
                 break;
             case EMO_SLEEPY:
-                tlh = 18.0f; trh = 18.0f;
+                tlh = 28.0f; trh = 28.0f; toy = 6.0f;
                 break;
             case EMO_FEAR:
-                tw = 62.0f; tlh = 80.0f; trh = 80.0f;
+                tw = 73.0f; tlh = 89.0f; trh = 89.0f; toy = -5.0f;
                 tfear = 1.0f; tfw = 1.0f; tshk = 1.0f;
                 break;
             case EMO_DISGUST:
-                tlh = 36.0f; trh = 50.0f;
+                tw = 77.0f; tlh = 45.0f; trh = 58.0f; tox = -8.0f; toy = -3.0f;
                 tl1 = 0.14f; tl2 = 0.44f; tr1 = 0.42f; tr2 = 0.16f;
                 bl1 = 0.06f; bl2 = 0.36f; br1 = 0.28f; br2 = 0.05f;
                 break;
             case EMO_CONTEMPT:
-                tox = 6.0f;
+                tw = 77.0f; tlh = 69.0f; trh = 69.0f; tox = 13.0f; toy = -2.0f;
                 tl1 = 0.47f; tl2 = 0.47f; tr1 = 0.47f; tr2 = 0.25f;
                 break;
             case EMO_SHAME:
-                tw = 58.0f; tlh = 54.0f; trh = 54.0f;
-                tox = -5.0f; toy = 4.0f;
+                tw = 68.0f; tlh = 65.0f; trh = 65.0f;
+                tox = -12.0f; toy = 9.0f; toy = 4.0f;
                 tl1 = 0.33f; tl2 = 0.04f; tr1 = 0.04f; tr2 = 0.33f;
                 tsw = 1.0f;
                 break;
             case EMO_DESPAIR:
-                tlh = 78.0f; trh = 78.0f;
+                tw = 79.0f; tlh = 87.0f; trh = 87.0f; toy = 5.0f;
                 tl1 = 0.41f; tl2 = 0.04f; tr1 = 0.04f; tr2 = 0.41f;
                 tdw = 1.0f; tshk = 2.0f;
                 break;
             case EMO_MALICE:
-                tlh = 58.0f; trh = 58.0f;
+                tw = 79.0f; tlh = 66.0f; trh = 66.0f; tox = 9.0f; toy = -3.0f;
                 tl1 = 0.06f; tl2 = 0.47f; tr1 = 0.47f; tr2 = 0.06f;
-                tarc = 0.7917f;
+                tarc = 0.7619f;
                 break;
             default:
                 break;
@@ -309,7 +260,6 @@ private:
     RobotState currentState = STATE_IDLE;
     FaceEmotion currentEmotion = EMO_NEUTRAL;
     String netBadge = "";
-    unsigned long lastFrame = 0;
     unsigned long lastBlink = 0;
     bool isBlinking = false;
     FaceMorphEngine faceMorph;
@@ -363,8 +313,159 @@ private:
     }
 
 #if ENABLE_PHYSICAL_DISPLAY
-    LGFX_Estardyn_JD9853 tft;
-    LGFX_Sprite canvas{&tft};
+    LGFX_Sprite canvas;
+    bool spriteReady = false;
+    bool canvasNeedsByteSwap = false;
+    bool backlightPwmAttached = false;
+    bool previousFrameValid = false;
+    uint16_t* previousFrame = nullptr;
+    uint8_t timedEyeFrames = 0;
+    uint32_t eyeTimingStartUs = 0;
+    uint32_t eyeTransferUs = 0;
+    SemaphoreHandle_t tftMux = nullptr;
+    uint8_t currentRotation = 0;
+    static constexpr uint8_t backlightChannel = 7;
+    static constexpr uint8_t bgrBit = 0x08;
+    static constexpr uint32_t commandSpiHz = 4000000;
+    static constexpr uint32_t framebufferSpiHz = 40000000;
+    static constexpr size_t chunkBytes = 4096;
+    alignas(4) uint8_t transferChunk[chunkBytes];
+
+    void beginCommand(int dcPin, int csPin, uint8_t cmd, uint8_t spiMode,
+                      uint32_t clockHz = commandSpiHz) {
+        SPI.beginTransaction(SPISettings(clockHz, MSBFIRST, spiMode));
+        digitalWrite(csPin, LOW);
+        digitalWrite(dcPin, LOW);
+        SPI.transfer(cmd);
+    }
+
+    void endCommand(int csPin) {
+        digitalWrite(csPin, HIGH);
+        SPI.endTransaction();
+    }
+
+    void rawWriteCmdData(int dcPin, int csPin, uint8_t cmd,
+                         const uint8_t* data, size_t len, uint8_t spiMode) {
+        beginCommand(dcPin, csPin, cmd, spiMode);
+        if (len) {
+            digitalWrite(dcPin, HIGH);
+            SPI.writeBytes(data, len);
+        }
+        endCommand(csPin);
+    }
+
+    void rawWriteCmd(uint8_t cmd) {
+        rawWriteCmdData(PIN_TFT_DC, PIN_TFT_CS, cmd, nullptr, 0, SPI_MODE0);
+    }
+
+    void writeRotation(int dcPin, int csPin, uint8_t spiMode) {
+        static constexpr uint8_t madctl[] = {0x00, 0x60, 0xC0, 0xA0};
+        const uint8_t value = madctl[currentRotation] | bgrBit;
+        rawWriteCmdData(dcPin, csPin, 0x36, &value, 1, spiMode);
+    }
+
+    void resetPanel(int dcPin, int csPin) {
+        pinMode(csPin, OUTPUT);
+        digitalWrite(csPin, HIGH);
+        pinMode(dcPin, OUTPUT);
+        digitalWrite(dcPin, HIGH);
+        pinMode(PIN_TFT_RES, OUTPUT);
+        digitalWrite(PIN_TFT_RES, HIGH);
+        delay(10);
+        digitalWrite(PIN_TFT_RES, LOW);
+        delay(30);
+        digitalWrite(PIN_TFT_RES, HIGH);
+        delay(150);
+    }
+
+    void rawInitOtp() {
+        resetPanel(PIN_TFT_DC, PIN_TFT_CS);
+        rawWriteCmd(0x11);
+        delay(120);
+        alignas(4) const uint8_t pixelMode[4] = {0x55};
+        rawWriteCmdData(PIN_TFT_DC, PIN_TFT_CS, 0x3A, pixelMode, 1, SPI_MODE0);
+        writeRotation(PIN_TFT_DC, PIN_TFT_CS, SPI_MODE0);
+        rawWriteCmd(0x21);
+        rawWriteCmd(0x13);
+        rawWriteCmd(0x29);
+        delay(50);
+    }
+
+    void setAddressRange(uint8_t cmd, uint16_t start, uint16_t end) {
+        const uint8_t data[] = {uint8_t(start >> 8), uint8_t(start),
+                                uint8_t(end >> 8), uint8_t(end)};
+        rawWriteCmdData(PIN_TFT_DC, PIN_TFT_CS, cmd, data, sizeof(data), SPI_MODE0);
+    }
+
+    // Caller holds tftMux. RAMWR keeps CS low across all pixel chunks.
+    void pushCanvasViaSpi() {
+        const auto* pixels = static_cast<const uint16_t*>(canvas.getBuffer());
+        int left = 0, top = 0, right = FACE_SCREEN_W - 1, bottom = FACE_SCREEN_H - 1;
+        if (previousFrameValid) {
+            left = FACE_SCREEN_W;
+            top = FACE_SCREEN_H;
+            right = bottom = -1;
+            constexpr size_t rowBytes = FACE_SCREEN_W * sizeof(uint16_t);
+            for (int y = 0; y < FACE_SCREEN_H; ++y) {
+                const auto* row = pixels + y * FACE_SCREEN_W;
+                const auto* prior = previousFrame + y * FACE_SCREEN_W;
+                if (memcmp(row, prior, rowBytes) == 0) continue;
+                int x0 = 0;
+                int x1 = FACE_SCREEN_W - 1;
+                while (row[x0] == prior[x0]) ++x0;
+                while (row[x1] == prior[x1]) --x1;
+                left = min(left, x0);
+                right = max(right, x1);
+                top = min(top, y);
+                bottom = y;
+            }
+            if (right < 0) return;
+        }
+
+        const bool landscape = currentRotation & 1;
+        const int x0 = landscape ? left : FACE_SCREEN_H - 1 - bottom;
+        const int x1 = landscape ? right : FACE_SCREEN_H - 1 - top;
+        const int y0 = landscape ? top : left;
+        const int y1 = landscape ? bottom : right;
+        setAddressRange(0x2A, x0, x1);
+        setAddressRange(0x2B, y0, y1);
+        beginCommand(PIN_TFT_DC, PIN_TFT_CS, 0x2C, SPI_MODE0, framebufferSpiHz);
+        digitalWrite(PIN_TFT_DC, HIGH);
+        size_t used = 0;
+        for (int y = y0; y <= y1; ++y) {
+            const uint16_t* pixel = landscape
+                ? pixels + y * FACE_SCREEN_W + x0
+                : pixels + (FACE_SCREEN_H - 1 - x0) * FACE_SCREEN_W + y;
+            const int step = landscape ? 1 : -FACE_SCREEN_W;
+            for (int x = x0; x <= x1; ++x) {
+                const uint16_t value = pixel[(x - x0) * step];
+                const uint16_t wire = canvasNeedsByteSwap ? __builtin_bswap16(value) : value;
+                transferChunk[used++] = uint8_t(wire);
+                transferChunk[used++] = uint8_t(wire >> 8);
+                if (used == chunkBytes) {
+                    SPI.writeBytes(transferChunk, used);
+                    used = 0;
+                }
+            }
+        }
+        if (used) SPI.writeBytes(transferChunk, used);
+        endCommand(PIN_TFT_CS);
+
+        if (previousFrame) {
+            memcpy(previousFrame, pixels, FACE_SCREEN_W * FACE_SCREEN_H * sizeof(uint16_t));
+            previousFrameValid = true;
+        }
+    }
+
+    void drawColorTest() {
+        canvas.fillRect(0, 0, 99, FACE_SCREEN_H, TFT_RED);
+        canvas.fillRect(99, 0, 98, FACE_SCREEN_H, TFT_GREEN);
+        canvas.fillRect(197, 0, 99, FACE_SCREEN_H, TFT_BLUE);
+        canvas.setTextColor(TFT_WHITE, TFT_BLACK);
+        canvas.setTextSize(2);
+        canvas.setCursor(52, 110);
+        canvas.print("CIBORGUE 296x240");
+    }
 
     void drawCardFrame(uint16_t accent, const char* title, const char* badgeRight, float remainRatio = -1.0f) {
         canvas.fillRoundRect(8, 8, FACE_SCREEN_W - 16, FACE_SCREEN_H - 16, 18, 0x0883);
@@ -690,8 +791,29 @@ private:
     void drawSingleEyeMorph(int ex, int centerY, int ew, int eh, bool isLeft,
                             uint16_t eyeColor, int shakeX, unsigned long now) {
         int ey = centerY - eh / 2;
-        int rad = min(18, max(2, eh / 2));
-        canvas.fillRoundRect(ex, ey, ew, eh, rad, eyeColor);
+        const int rad = min(23, min(ew, eh) / 2);
+        const float red = faceMorph.colR.val;
+        const float green = faceMorph.colG.val;
+        const float blue = faceMorph.colB.val;
+        canvas.fillRoundRect(ex - 2, ey - 2, ew + 4, eh + 4, rad + 2,
+                             packRgb565(red * 0.25f, green * 0.25f, blue * 0.25f));
+        for (int row = 0; row < eh; ++row) {
+            const int cornerY = max(0, rad - min(row, eh - 1 - row));
+            const int inset = rad - (int)sqrtf(rad * rad - cornerY * cornerY);
+            const float t = (float)row / (eh - 1);
+            const float shade = t < 0.55f ? 1.35f - 0.35f * t / 0.55f
+                                          : 1.0f - (t - 0.55f) * 0.37f;
+            canvas.drawFastHLine(ex + inset, ey + row, ew - 2 * inset,
+                                 packRgb565(red * shade, green * shade, blue * shade));
+        }
+        if (eh > 23) {
+            canvas.fillEllipse(ex + ew * 30 / 100, centerY - eh * 22 / 100,
+                               ew * 13 / 100, eh * 11 / 100, 0xEFFF);
+            canvas.fillEllipse(ex + ew * 68 / 100, centerY + eh * 20 / 100,
+                               ew * 6 / 100, eh * 6 / 100,
+                               packRgb565((red + 255) * 0.5f, (green + 255) * 0.5f,
+                                          (blue + 255) * 0.5f));
+        }
 
         if (eh > 16) {
             float tl = isLeft ? faceMorph.lTopL.val : faceMorph.rTopL.val;
@@ -721,9 +843,10 @@ private:
 
             float ba = max(0.0f, min(1.12f, faceMorph.botArc.val));
             if (ba > 0.01f) {
-                int arcCy = centerY + (int)(86.0f - 48.0f * ba);
-                int arcR = (int)(44.0f - 2.0f * clampf01(1.0f - ba));
-                canvas.fillCircle(ex + ew / 2, arcCy, arcR, TFT_BLACK);
+                const float arcHeight = eh * (0.88f + 0.08f * min(1.0f, ba));
+                const int arcY = centerY + (int)(eh * (0.56f - 0.42f * ba) + arcHeight / 2);
+                canvas.fillEllipse(ex + ew / 2, arcY, (int)(ew * 0.68f),
+                                   (int)(arcHeight / 2), TFT_BLACK);
             }
 
             float bl = isLeft ? faceMorph.lBotL.val : faceMorph.rBotL.val;
@@ -791,7 +914,7 @@ private:
                 break;
             }
             case MK_LISTEN: {
-                int ph = sw(10.0f + 4.0f * abs(sinf((float)now * 0.008f)));
+                int ph = sw(10.0f + 4.0f * fabsf(sinf((float)now * 0.008f)));
                 int pw = sw(32.0f);
                 canvas.fillRoundRect(mouthX - pw / 2, mouthY - ph / 2, pw, ph, max(2, sw(5)), eyeColor);
                 if (pw > 8 && ph > 6) {
@@ -889,8 +1012,13 @@ private:
                 break;
             }
             default: {
-                int mw = sw(36), mh = max(2, sw(5));
-                canvas.fillRoundRect(mouthX - mw / 2, mouthY, mw, mh, max(1, mh / 2), eyeColor);
+                const int halfWidth = sw(23);
+                const int radius = max(1, sw(2));
+                for (int dx = -halfWidth; dx <= halfWidth; ++dx) {
+                    const float t = (float)dx / halfWidth;
+                    const int dy = (int)roundf(scale * (6.0f - 8.0f * t * t));
+                    canvas.fillCircle(mouthX + dx, mouthY + dy, radius, eyeColor);
+                }
                 break;
             }
         }
@@ -903,12 +1031,38 @@ public:
             stateMux = xSemaphoreCreateMutex();
         }
 #if ENABLE_PHYSICAL_DISPLAY
-        tft.init();
-        tft.setRotation(1); // Paisagem Horizontal: 296x240
-        tft.setBrightness(220);
+        tftMux = xSemaphoreCreateMutex();
+        if (!tftMux) {
+            Serial.println("EVT:LOG=TFT falha ao criar mutex");
+            return;
+        }
+
+        pinMode(PIN_TFT_BLK, OUTPUT);
+        digitalWrite(PIN_TFT_BLK, HIGH);
+        SPI.begin(PIN_TFT_SCK, -1, PIN_TFT_MOSI, -1);
+        rawInitOtp();
+        rawWriteCmd(0x20);
+
+        ledcSetup(backlightChannel, 12000, 8);
+        setBrightness(TFT_AWAKE_BRIGHTNESS);
+        canvas.setColorDepth(16);
         canvas.setPsram(true);
-        canvas.createSprite(FACE_SCREEN_W, FACE_SCREEN_H);
-        Serial.println("EVT:LOG=Display Estardyn 2.01\" JD9853 (296x240) inicializado!");
+        canvas.setSwapBytes(true);
+        if (!canvas.createSprite(FACE_SCREEN_W, FACE_SCREEN_H)) {
+            Serial.println("EVT:LOG=TFT falha ao alocar canvas RGB565");
+            return;
+        }
+        drawColorTest();
+        const auto* rgb = static_cast<const uint8_t*>(canvas.getBuffer());
+        const uint8_t* green = rgb + 99 * 2;
+        const uint8_t* blue = rgb + 197 * 2;
+        Serial.printf("EVT:LOG=TFT JD9853 OTP SPI comandos=%uMHz framebuffer=%uMHz canvas=296x240 RGB565 R=%02X%02X G=%02X%02X B=%02X%02X\n",
+                      unsigned(commandSpiHz / 1000000), unsigned(framebufferSpiHz / 1000000),
+                      rgb[0], rgb[1], green[0], green[1], blue[0], blue[1]);
+        canvasNeedsByteSwap = rgb[0] == 0x00 && rgb[1] == 0xF8;
+        previousFrame = static_cast<uint16_t*>(ps_malloc(FACE_SCREEN_W * FACE_SCREEN_H * sizeof(uint16_t)));
+        Serial.printf("EVT:LOG=TFT atualizacao parcial=%d\n", previousFrame != nullptr);
+        spriteReady = true;
 #else
         Serial.println("EVT:LOG=Display em Modo Simulador Virtual 296x240 no PC (ENABLE_PHYSICAL_DISPLAY=0)");
 #endif
@@ -1079,16 +1233,62 @@ public:
 
     void setBrightness(uint8_t level) {
 #if ENABLE_PHYSICAL_DISPLAY
-        tft.setBrightness(level);
+        if (level == 255) {
+            if (backlightPwmAttached) {
+                ledcDetachPin(PIN_TFT_BLK);
+                backlightPwmAttached = false;
+            }
+            pinMode(PIN_TFT_BLK, OUTPUT);
+            digitalWrite(PIN_TFT_BLK, HIGH);
+        } else {
+            ledcWrite(backlightChannel, level);
+            if (!backlightPwmAttached) {
+                ledcAttachPin(PIN_TFT_BLK, backlightChannel);
+                backlightPwmAttached = true;
+            }
+        }
 #else
         (void)level;
 #endif
     }
 
+    void setRotation(uint8_t rot) {
+#if ENABLE_PHYSICAL_DISPLAY
+        if (!spriteReady) return;
+        xSemaphoreTake(tftMux, portMAX_DELAY);
+        currentRotation = rot & 3;
+        previousFrameValid = false;
+        writeRotation(PIN_TFT_DC, PIN_TFT_CS, SPI_MODE0);
+        xSemaphoreGive(tftMux);
+#else
+        (void)rot;
+#endif
+    }
+
+    void setInvert(bool inv) {
+#if ENABLE_PHYSICAL_DISPLAY
+        if (!spriteReady) return;
+        xSemaphoreTake(tftMux, portMAX_DELAY);
+        rawWriteCmd(inv ? 0x21 : 0x20);
+        xSemaphoreGive(tftMux);
+#else
+        (void)inv;
+#endif
+    }
+
+    void runColorTest() {
+#if ENABLE_PHYSICAL_DISPLAY
+        if (!spriteReady) return;
+        xSemaphoreTake(tftMux, portMAX_DELAY);
+        drawColorTest();
+        pushCanvasViaSpi();
+        delay(1000);
+        xSemaphoreGive(tftMux);
+#endif
+    }
+
     void update() {
         unsigned long now = millis();
-        if (now - lastFrame < 20) return;
-        lastFrame = now;
 
         if (!isBlinking && (now - lastBlink > 3800)) {
             isBlinking = true;
@@ -1101,6 +1301,7 @@ public:
         faceMorph.step(currentState, currentEmotion, now, isBlinking);
 
 #if ENABLE_PHYSICAL_DISPLAY
+        if (!spriteReady) return;
         DisplayWidgetType curW = WIDGET_NONE;
         unsigned long wUntil = 0, wDur = WIDGET_DEFAULT_DURATION_MS;
         bool dClock = false, aRing = false;
@@ -1130,6 +1331,8 @@ public:
         pcAct = pcAction; pcPrm = pcParam; badge = netBadge;
         unlockState();
 
+        xSemaphoreTake(tftMux, portMAX_DELAY);
+        canvas.startWrite();
         canvas.fillScreen(TFT_BLACK);
 
         if (curW != WIDGET_NONE || dClock) {
@@ -1140,7 +1343,9 @@ public:
                             cTime, cDate, cWd, wc, tTitles, tDone, dCnt, tCnt,
                             isFocus, pRem, pTot, pGoal, tRem, tTot, tLbl,
                             ps, mLbl, aTime, aLbl, aHint, pcAct, pcPrm);
-            canvas.pushSprite(0, 0);
+            canvas.endWrite();
+            pushCanvasViaSpi();
+            xSemaphoreGive(tftMux);
             return;
         }
 
@@ -1154,18 +1359,20 @@ public:
 
         int offX = (int)roundf(faceMorph.offX.val);
         int offY = (int)roundf(faceMorph.offY.val);
-        int centerXOffset = (68 - eyeW) / 2;
-        int leftX   = 56 + centerXOffset + offX + shakeX;
-        int rightX  = 172 + centerXOffset + offX + shakeX;
-        int centerY = 96 + offY;
+        const int breathY = (int)roundf(sinf(now * 0.0024f) * 2.55f);
+        const int leftW = max(20, eyeW - eyeW * offX / 151);
+        const int rightW = max(20, eyeW + eyeW * offX / 151);
+        const int leftX = 85 - leftW / 2 + offX + shakeX;
+        const int rightX = 211 - rightW / 2 + offX + shakeX;
+        const int centerY = 96 + offY + breathY;
 
         // 1. Olhos Cozmo/Eilik com Morph Contínuo
-        drawSingleEyeMorph(leftX, centerY, eyeW, leftH, true, eyeColor, shakeX, now);
-        drawSingleEyeMorph(rightX, centerY, eyeW, rightH, false, eyeColor, shakeX, now);
+        drawSingleEyeMorph(leftX, centerY, leftW, leftH, true, eyeColor, shakeX, now);
+        drawSingleEyeMorph(rightX, centerY, rightW, rightH, false, eyeColor, shakeX, now);
 
         // 2. Boca Expressiva Eilik/BMO com Morph Elástico + LipSync (y = 166)
-        int mouthX = FACE_SCREEN_W / 2;
-        int mouthY = 166;
+        int mouthX = FACE_SCREEN_W / 2 + (int)roundf(offX * 0.45f);
+        int mouthY = 170 + breathY + (int)roundf(offY * 0.35f);
         if (faceMorph.mouthT >= 0.999f || faceMorph.prevMouth == faceMorph.currMouth) {
             drawMouthShapeMorph(faceMorph.currMouth, mouthX, mouthY, 1.0f, eyeColor, now, shakeX);
         } else if (faceMorph.mouthT < 0.40f) {
@@ -1180,7 +1387,26 @@ public:
         // 3. Pílula discreta no topo (apenas se Pomodoro, Timer ou AP/OFFLINE ativos)
         drawTopPill(now, hasPomo, isFocus, pRem, pTot, hasTmr, tRem, tTot, badge);
 
-        canvas.pushSprite(0, 0);
+        canvas.endWrite();
+        const uint32_t transferStartUs = micros();
+        pushCanvasViaSpi();
+        xSemaphoreGive(tftMux);
+        constexpr uint8_t sampleFrames = 16;
+        if (timedEyeFrames < sampleFrames) {
+            const uint32_t transferEndUs = micros();
+            if (timedEyeFrames == 0) {
+                eyeTimingStartUs = transferEndUs;
+                Serial.println("EVT:LOG=TFT primeiro frame dos olhos enviado");
+            } else {
+                eyeTransferUs += transferEndUs - transferStartUs;
+            }
+            if (++timedEyeFrames == sampleFrames) {
+                const uint32_t elapsedUs = transferEndUs - eyeTimingStartUs;
+                Serial.printf("EVT:LOG=TFT olhos FPS=%.1f flush_medio_ms=%.1f\n",
+                              (sampleFrames - 1) * 1000000.0 / elapsedUs,
+                              eyeTransferUs / ((sampleFrames - 1) * 1000.0));
+            }
+        }
 #else
         lockState();
         if (activeWidget != WIDGET_NONE && widgetUntilMs > 0 && (long)(now - widgetUntilMs) >= 0) {

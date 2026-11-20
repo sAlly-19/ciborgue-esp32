@@ -121,7 +121,7 @@ public:
         lastActivityMillis = millis();
         if (stage == PWR_ECO_SLEEPY) {
             stage = PWR_AWAKE;
-            display.setBrightness(220);
+            display.setBrightness(TFT_AWAKE_BRIGHTNESS);
             led.setBrightnessScale(1.0f);
             WiFi.setSleep(false);
             setRobotEmotion(EMO_NEUTRAL);
@@ -208,7 +208,7 @@ public:
 
         stage = PWR_AWAKE;
         lastActivityMillis = millis();
-        display.setBrightness(220);
+        display.setBrightness(TFT_AWAKE_BRIGHTNESS);
         led.setBrightnessScale(1.0f);
         animPaused = false;
         personality.onRested();

@@ -7,7 +7,7 @@
 // 1. FLAGS DE HARDWARE (Mude para 1 assim que as peças chegarem do AliExpress)
 // ============================================================================
 #ifndef ENABLE_PHYSICAL_DISPLAY
-#define ENABLE_PHYSICAL_DISPLAY 0   // 1 = Ativa Tela Estardyn 2.01" TFT 240x296 (JD9853 SPI)
+#define ENABLE_PHYSICAL_DISPLAY 1   // 1 = Ativa Tela Estardyn 2.01" TFT 240x296 (JD9853 SPI)
 #endif
 #ifndef ENABLE_PHYSICAL_AUDIO
 #define ENABLE_PHYSICAL_AUDIO   0   // 1 = Ativa Microfone INMP441 + Amplificador MAX98357A (I2S)
@@ -41,6 +41,7 @@
 #define PIN_TFT_BLK         14      // Pino BLK (Backlight) da tela
 
 // Dimensões da Tela (Modo Paisagem Horizontal: 296x240)
+#define TFT_AWAKE_BRIGHTNESS 255
 #define TFT_NATIVE_WIDTH   240
 #define TFT_NATIVE_HEIGHT  296
 #define FACE_SCREEN_W      296

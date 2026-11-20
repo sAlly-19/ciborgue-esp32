@@ -186,7 +186,7 @@ void sendTelemetryPacket() {
     Serial.printf("EVT:TELEMETRY=%s\n", out.c_str());
 }
 
-// Task FreeRTOS dedicada à animação 50 FPS (continua fluida mesmo durante chamadas HTTPS Gemini)
+// Task FreeRTOS dedicada à animação com intervalo alvo de 16 ms
 void animTask(void* pvParameters) {
     while (true) {
         if (animPaused) {
@@ -195,9 +195,12 @@ void animTask(void* pvParameters) {
             continue;
         }
         animIsParked = false;
+        const TickType_t frameStart = xTaskGetTickCount();
         ledController.update(currentState);
         displayHal.update();
-        vTaskDelay(pdMS_TO_TICKS(20));
+        const TickType_t frameTicks = pdMS_TO_TICKS(16);
+        const TickType_t elapsed = xTaskGetTickCount() - frameStart;
+        vTaskDelay(elapsed < frameTicks ? frameTicks - elapsed : 1);
     }
 }
 
@@ -243,6 +246,30 @@ void processSerialCommand(String cmd) {
 
     powerManager.registerActivity();
 
+    // Calibração rápida da tela física via Serial (orientação, inversão de cores e brilho)
+    if (cmd.startsWith("CMD:TFT_ROT=")) {
+        uint8_t rot = (uint8_t)(cmd.substring(12).toInt() & 3);
+        displayHal.setRotation(rot);
+        Serial.printf("EVT:LOG=Display rotacao=%u\n", (unsigned)rot);
+        return;
+    }
+    if (cmd.startsWith("CMD:TFT_INV=")) {
+        bool inv = cmd.substring(12).toInt() != 0;
+        displayHal.setInvert(inv);
+        Serial.printf("EVT:LOG=Display invert=%d\n", inv ? 1 : 0);
+        return;
+    }
+    if (cmd.startsWith("CMD:TFT_BRI=")) {
+        uint8_t bri = (uint8_t)constrain(cmd.substring(12).toInt(), 0, 255);
+        displayHal.setBrightness(bri);
+        Serial.printf("EVT:LOG=Display brilho=%u\n", (unsigned)bri);
+        return;
+    }
+    if (cmd == "CMD:TFT_TEST") {
+        displayHal.runColorTest();
+        Serial.println("EVT:LOG=Display teste RGB direto concluido");
+        return;
+    }
     // 2. Portal Cativo Wi-Fi
     if (cmd == "CMD:PORTAL") {
         captivePortal.startPortal(true);
@@ -590,8 +617,8 @@ void setup() {
 
     sfxSynth.play(SFX_BOOT);
 
-    // Inicia task de animação em segundo plano no Core 0 (50 FPS garantidos)
-    xTaskCreatePinnedToCore(animTask, "AnimTask", 4096, NULL, 1, NULL, 0);
+    // Inicia task de animação em segundo plano no Core 0
+    xTaskCreatePinnedToCore(animTask, "AnimTask", 8192, NULL, 1, NULL, 0);
 
     if (nvsConfig.hasWifiCredentials() && nvsConfig.connectWifi(WIFI_BOOT_CONNECT_TIMEOUT_MS)) {
         displayHal.setNetBadge("");

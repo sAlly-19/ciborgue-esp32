@@ -7,6 +7,7 @@ import { FeedbackProvider } from '../src/components/feedback';
 import { useConfirm } from '../src/components/feedback-context';
 import { ExpressionControls } from '../src/components/robot-controls';
 import Settings from '../src/app/configuracoes';
+import Chat from '../src/app/chat';
 import { Action, Card, ConnectionLine, Screen, Selection, Toggle, Txt } from '../src/components/ui';
 
 vi.mock('react-native', () => ({
@@ -32,7 +33,13 @@ vi.mock('expo-router', () => ({ useRouter: () => ({ navigate: vi.fn() }) }));
 vi.mock('@expo/vector-icons', () => ({ Ionicons: 'Ionicons' }));
 vi.mock('@react-native-async-storage/async-storage', () => ({ default: {} }));
 vi.mock('@react-native-community/slider', () => ({ default: 'Slider' }));
-vi.mock('expo-haptics', () => ({ notificationAsync: async () => {}, NotificationFeedbackType: { Success: 'success', Error: 'error' } }));
+vi.mock('expo-haptics', () => ({
+  notificationAsync: async () => {},
+  selectionAsync: async () => {},
+  impactAsync: async () => {},
+  NotificationFeedbackType: { Success: 'success', Error: 'error' },
+  ImpactFeedbackStyle: { Light: 'light', Medium: 'medium', Heavy: 'heavy' },
+}));
 vi.mock('react-native-safe-area-context', () => ({ useSafeAreaInsets: () => ({ top: 0, bottom: 0, left: 0, right: 0 }) }));
 let mockTelemetry: { data?: { timerTotal?: number; pomo?: boolean; ringing?: boolean }; receivedAt?: number } | null = null;
 vi.mock('../src/stores/robot', () => ({
@@ -190,5 +197,18 @@ test('o Dock exibe indicador de atividade na aba Rotina quando houver timer ou a
   const tempoTab = component!.root.findByProps({ accessibilityRole: 'tab', accessibilityLabel: 'Rotina (Atividade ativa)' });
   expect(tempoTab).toBeDefined();
   mockTelemetry = null;
+});
+
+test('o Chat exibe chips deslizantes de atalho que preenchem a mensagem ao tocar', () => {
+  act(() => { component = create(<FeedbackProvider><Chat /></FeedbackProvider>); });
+  const scroll = component!.root.findByProps({ accessibilityLabel: 'Sugestões de perguntas rápidas' });
+  expect(scroll.props.horizontal).toBe(true);
+
+  const chip = component!.root.findAllByProps({ accessibilityRole: 'button' }).find(item => item.props.accessibilityLabel === 'Como você está?');
+  expect(chip).toBeDefined();
+
+  act(() => chip!.props.onPress());
+  const input = component!.root.findByProps({ accessibilityLabel: 'Mensagem' });
+  expect(input.props.value).toBe('Como você está?');
 });
 

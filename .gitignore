@@ -65,3 +65,8 @@ Thumbs.db
 # Dados locais da bancada
 ciborgue_memory_mirror.json
 /HANDOFF_CODEX_DISPLAY.md
+
+# Superpowers & local tooling
+.agents/
+.superpowers/
+.npmrc

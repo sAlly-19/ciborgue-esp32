@@ -2,8 +2,8 @@ import { useConfirm } from '../components/feedback-context';
 import { Ionicons } from '@expo/vector-icons';
 import * as Haptics from 'expo-haptics';
 import { useRouter } from 'expo-router';
-import { useState } from 'react';
-import { Animated, Pressable, StyleSheet, View } from 'react-native';
+import { useEffect, useState } from 'react';
+import { AccessibilityInfo, Animated, Pressable, StyleSheet, View } from 'react-native';
 import { ack, personality } from '../api/protocol';
 import { Countdown } from '../components/countdown';
 import { AudioControls, ExpressionControls, LedControls } from '../components/robot-controls';
@@ -95,7 +95,15 @@ function Shortcut({ icon, title, detail, color, disabled, onPress }: {
 }) {
   const c = usePalette();
   const [scale] = useState(() => new Animated.Value(1));
+  const [reduced, setReduced] = useState(true);
+  useEffect(() => {
+    let mounted = true;
+    void AccessibilityInfo.isReduceMotionEnabled().then(value => { if (mounted) setReduced(value); }).catch(() => {});
+    const sub = AccessibilityInfo.addEventListener('reduceMotionChanged', setReduced);
+    return () => { mounted = false; sub.remove(); };
+  }, []);
   const animatePulse = () => {
+    if (reduced) return;
     Animated.sequence([
       Animated.timing(scale, { toValue: 1.25, duration: 150, useNativeDriver: true }),
       Animated.timing(scale, { toValue: 1, duration: 150, useNativeDriver: true }),

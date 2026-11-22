@@ -1,8 +1,8 @@
 import { Ionicons } from '@expo/vector-icons';
 import * as Haptics from 'expo-haptics';
 import { useConfirm } from '../components/feedback-context';
-import { useCallback, useState } from 'react';
-import { ActivityIndicator, FlatList, Pressable, ScrollView, View } from 'react-native';
+import { useState } from 'react';
+import { ActivityIndicator, Pressable, ScrollView, View } from 'react-native';
 import { ack, ApiError, chatReply, proposalResolution, type MemoryProposal } from '../api/protocol';
 import { Action, Card, Field, Notice, Row, Screen, Txt, useAction, useDisabled, usePalette } from '../components/ui';
 import { mutate, useConnectionValue, useRobot } from '../stores/robot';
@@ -58,34 +58,23 @@ function Conversation() {
     }, action === 'keep' ? 'Proposta processada.' : 'Proposta dispensada.');
   }
 
-  const renderItem = useCallback(({ item }: { item: Message }) => (
-    <View style={{
-      backgroundColor: item.role === 'user' ? c.accent : c.bg,
-      alignSelf: item.role === 'user' ? 'flex-end' : 'flex-start',
-      maxWidth: '93%',
-      padding: 12,
-      borderRadius: 13,
-      marginBottom: 8,
-    }}>
-      <Txt style={{ color: item.role === 'user' ? c.ink : c.text }}>{item.text}</Txt>
-    </View>
-  ), [c.accent, c.bg, c.ink, c.text]);
-
   return <Screen title="Chat" icon="sparkles-outline">
     <Notice text={a.notice} failed={a.failed} />
     <Card title="Conversa">
       {key === false && <Txt muted>Configure a chave Gemini em Ajustes para usar o assistente online.</Txt>}
       {history.length === 0 && <Txt muted>Envie uma mensagem para conversar com o Ciborgue.</Txt>}
-      {history.length > 0 && (
-        <FlatList
-          data={history}
-          keyExtractor={item => item.id}
-          renderItem={renderItem}
-          scrollEnabled={false}
-          initialNumToRender={15}
-          maxToRenderPerBatch={10}
-        />
-      )}
+      {history.map(item => (
+        <View key={item.id} style={{
+          backgroundColor: item.role === 'user' ? c.accent : c.bg,
+          alignSelf: item.role === 'user' ? 'flex-end' : 'flex-start',
+          maxWidth: '93%',
+          padding: 12,
+          borderRadius: 13,
+          marginBottom: 8,
+        }}>
+          <Txt style={{ color: item.role === 'user' ? c.ink : c.text }}>{item.text}</Txt>
+        </View>
+      ))}
       {proposal && <View style={{ backgroundColor: c.tint, padding: 14, borderRadius: 14, gap: 8 }}>
         <Txt style={{ fontWeight: '800' }}>Guardar na memória?</Txt>
         <Txt>{proposal.fact}</Txt>
@@ -111,6 +100,7 @@ function Conversation() {
       <ScrollView
         horizontal
         showsHorizontalScrollIndicator={false}
+        keyboardShouldPersistTaps="handled"
         accessibilityLabel="Sugestões de perguntas rápidas"
         contentContainerStyle={{ gap: 8, paddingVertical: 4 }}>
         {quick.map(message => (

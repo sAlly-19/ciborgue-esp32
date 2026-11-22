@@ -22,9 +22,9 @@ export function Row({ children }: { children: ReactNode }) {
 export function Grid({ children }: { children: ReactNode }) {
   return <View style={styles.grid}>{children}</View>;
 }
-export function Card({ title, children }: { title: string; children: ReactNode }) {
+export function Card({ title, children, style }: { title: string; children: ReactNode; style?: ComponentProps<typeof View>['style'] }) {
   const c = usePalette();
-  return <View style={[styles.card, { backgroundColor: c.surface, borderColor: c.line }]}>
+  return <View style={[styles.card, { backgroundColor: c.surface, borderColor: c.line }, style]}>
     <Txt style={styles.cardTitle}>{title}</Txt>{children}
   </View>;
 }
@@ -143,9 +143,12 @@ export function Screen({ title, icon, children, onRefresh, showConnection = true
   const insets = useSafeAreaInsets();
   const [pulling, setPulling] = useState(false);
   const panResponder = useMemo(() => onBack ? PanResponder.create({
-    onMoveShouldSetPanResponder: (_, g) => g.x0 <= 40 && g.dx > 25 && Math.abs(g.dy) < 30,
+    onMoveShouldSetPanResponder: (_, g) => {
+      const startX = g.moveX !== undefined ? g.moveX - g.dx : g.x0;
+      return startX <= 40 && g.dx > 25 && Math.abs(g.dy) < 30;
+    },
     onPanResponderRelease: (_, g) => {
-      if (g.dx > 60) {
+      if (g.dx > 60 && Math.abs(g.dy) < 50) {
         void Haptics.impactAsync?.(Haptics.ImpactFeedbackStyle.Light).catch(() => {});
         onBack();
       }

@@ -45,7 +45,7 @@ export default function Settings() {
     <Notice text={a.notice} failed={a.failed} />
     <Choices<SettingsCategory> items={categories} selected={category} onSelect={setCategory} />
     <Grid>
-      {showNet && <Card title="Endereço do Ciborgue">
+      <Card title="Endereço do Ciborgue" style={{ display: showNet ? 'flex' : 'none' }}>
         <Field label="IPv4 ou endereço .local" value={address ?? host} onChangeText={setAddress} autoCapitalize="none" keyboardType="url" />
         <Row>
           <Action title="Testar e salvar" disabled={busy || !ready} active onPress={() => test(address ?? host)} />
@@ -53,8 +53,8 @@ export default function Settings() {
         </Row>
         <Txt>Rede {s?.network ?? '—'} · {s?.ssid || 'SSID indisponível'}</Txt>
         <Txt muted>{s?.ip || 'IP indisponível'} · {s?.wifi ? metric(s.rssi, ' dBm') : 'RSSI indisponível'}</Txt>
-      </Card>}
-      {showNet && <Card title="Wi-Fi do robô">
+      </Card>
+      <Card title="Wi-Fi do robô" style={{ display: showNet ? 'flex' : 'none' }}>
         <Field label="Novo SSID" value={ssid} onChangeText={setSsid} autoCapitalize="none" />
         <Field label="Nova senha (vazia para rede aberta)" value={password} onChangeText={setPassword} autoCapitalize="none" secureTextEntry autoComplete="off" />
         <Action title="Salvar credenciais" disabled={disabled || !ssid.trim()} onPress={() => confirm('Alterar Wi-Fi', 'As credenciais serão enviadas por HTTP. O endereço do robô pode mudar depois de reconectar.', () => void a.run(async () => {
@@ -62,8 +62,8 @@ export default function Settings() {
           setPassword('');
           setSsid('');
         }, 'Credenciais gravadas no robô. Confira o IP após reconectar.'))} />
-      </Card>}
-      {showNet && <Card title="Portal cativo">
+      </Card>
+      <Card title="Portal cativo" style={{ display: showNet ? 'flex' : 'none' }}>
         <Txt>{s?.portal ? 'Aberto' : 'Fechado'} · {s?.clients ?? '—'} cliente(s)</Txt>
         <Txt muted>Com o portal aberto, conecte-se ao Wi-Fi Ciborgue-Setup e acesse {s?.apIp || '192.168.4.1'} no navegador.</Txt>
         <Row>
@@ -71,15 +71,15 @@ export default function Settings() {
           <Action title="Parar portal" disabled={disabled || !s?.portal} onPress={() => confirm('Parar portal', 'A conexão com o ponto de acesso será fechada.', () => void a.run(() => send('portal', { action: 'stop' })))} />
           <Action title="Abrir no navegador" disabled={!s?.portal} onPress={() => void a.run(() => Linking.openURL('http://192.168.4.1'), 'Portal aberto no navegador.')} />
         </Row>
-      </Card>}
-      {showNet && <Card title="Bluetooth">
+      </Card>
+      <Card title="Bluetooth" style={{ display: showNet ? 'flex' : 'none' }}>
         <Txt muted>Ajuste brilho e áudio diretamente pelo celular.</Txt>
         <Action title="Abrir Bluetooth" icon="bluetooth-outline" onPress={() => router.navigate('/bluetooth')} />
-      </Card>}
+      </Card>
 
-      {showDev && <Card title="Tela"><DisplayControls /></Card>}
-      {showDev && <Card title="Áudio"><AudioControls /></Card>}
-      {showDev && <Card title="Preferências do robô">
+      <Card title="Tela" style={{ display: showDev ? 'flex' : 'none' }}><DisplayControls /></Card>
+      <Card title="Áudio" style={{ display: showDev ? 'flex' : 'none' }}><AudioControls /></Card>
+      <Card title="Preferências do robô" style={{ display: showDev ? 'flex' : 'none' }}>
         <Field label="Cidade padrão" value={city ?? s?.city ?? ''} onChangeText={setCity} />
         <Action title="Salvar cidade" disabled={disabled || !city?.trim()} onPress={() => void a.run(async () => {
           await send('config', { city: city?.trim() ?? '' });
@@ -100,16 +100,16 @@ export default function Settings() {
             setKey('');
           }));
         }} />
-      </Card>}
+      </Card>
 
-      {showSys && theme && <Card title="Aparência">
+      {theme && <Card title="Aparência" style={{ display: showSys ? 'flex' : 'none' }}>
         <Choices<keyof typeof themes> items={themes} selected={theme.preference} disabled={a.pending} onSelect={value => void a.run(async () => {
           await theme.choose(value);
         }, 'Tema salvo neste celular.')} />
       </Card>}
-      {showSys && <Card title="Manutenção">
+      <Card title="Manutenção" style={{ display: showSys ? 'flex' : 'none' }}>
         <Action title="Avançado" icon="terminal-outline" onPress={() => router.navigate('/avancado')} />
-      </Card>}
+      </Card>
     </Grid>
   </Screen>;
 }

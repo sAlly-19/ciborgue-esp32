@@ -186,23 +186,25 @@ test('a contagem desce com o relógio e nunca fica negativa', () => {
 
 test('a tela de ajustes permite filtrar cards por categoria de forma organizada', () => {
   act(() => { component = create(<Settings />); });
-  const titles = () => component!.root.findAllByType(Card).map(card => card.props.title);
+  const visibleTitles = () => component!.root.findAllByType(Card)
+    .filter(card => card.props.style?.display !== 'none')
+    .map(card => card.props.title);
 
   const redeBtn = component!.root.findAllByType(Selection).find(item => item.props.label.includes('Rede'))
     ?? component!.root.findAllByType(Action).find(item => item.props.title?.includes('Rede'));
   expect(redeBtn).toBeDefined();
 
   act(() => redeBtn!.props.onPress());
-  expect(titles()).toContain('Endereço do Ciborgue');
-  expect(titles()).toContain('Wi-Fi do robô');
-  expect(titles()).not.toContain('Áudio');
+  expect(visibleTitles()).toContain('Endereço do Ciborgue');
+  expect(visibleTitles()).toContain('Wi-Fi do robô');
+  expect(visibleTitles()).not.toContain('Áudio');
 
   const dispBtn = component!.root.findAllByType(Selection).find(item => item.props.label.includes('Dispositivo'))
     ?? component!.root.findAllByType(Action).find(item => item.props.title?.includes('Dispositivo'));
   act(() => dispBtn!.props.onPress());
-  expect(titles()).toContain('Áudio');
-  expect(titles()).toContain('Tela');
-  expect(titles()).not.toContain('Wi-Fi do robô');
+  expect(visibleTitles()).toContain('Áudio');
+  expect(visibleTitles()).toContain('Tela');
+  expect(visibleTitles()).not.toContain('Wi-Fi do robô');
 });
 
 test('o Dock exibe indicador de atividade na aba Rotina quando houver timer ou alarme ativo', async () => {
@@ -237,16 +239,24 @@ test('o Screen suporta gesto de deslizar da borda esquerda para voltar', () => {
     component = create(<Screen title="Detalhes" onBack={onBack}><Txt>Conteúdo</Txt></Screen>);
   });
   const root = component!.root.children[0] as unknown as { props: { _panConfig?: {
-    onMoveShouldSetPanResponder?: (e: unknown, g: { x0: number; dx: number; dy: number }) => boolean;
-    onPanResponderRelease?: (e: unknown, g: { dx: number }) => void;
+    onMoveShouldSetPanResponder?: (e: unknown, g: { x0: number; moveX?: number; dx: number; dy: number }) => boolean;
+    onPanResponderRelease?: (e: unknown, g: { dx: number; dy?: number }) => void;
   } } };
   const panConfig = root.props._panConfig;
   expect(panConfig).toBeDefined();
-  expect(panConfig!.onMoveShouldSetPanResponder!(null, { x0: 20, dx: 35, dy: 5 })).toBe(true);
-  expect(panConfig!.onMoveShouldSetPanResponder!(null, { x0: 120, dx: 35, dy: 5 })).toBe(false);
+  // Valid edge touch: moveX 55, dx 30 -> startX is 25 <= 40
+  expect(panConfig!.onMoveShouldSetPanResponder!(null, { x0: 0, moveX: 55, dx: 30, dy: 5 })).toBe(true);
+  // Mid-screen touch where x0 might be 0 prior to grant, but moveX is 150, dx 30 -> startX is 120 > 40
+  expect(panConfig!.onMoveShouldSetPanResponder!(null, { x0: 0, moveX: 150, dx: 30, dy: 5 })).toBe(false);
 
-  panConfig!.onPanResponderRelease!(null, { dx: 80 });
+  panConfig!.onPanResponderRelease!(null, { dx: 80, dy: 5 });
   expect(onBack).toHaveBeenCalledOnce();
+});
+
+test('o Chat configura keyboardShouldPersistTaps handled no ScrollView de chips', () => {
+  act(() => { component = create(<FeedbackProvider><Chat /></FeedbackProvider>); });
+  const scroll = component!.root.findByProps({ accessibilityLabel: 'Sugestões de perguntas rápidas' });
+  expect(scroll.props.keyboardShouldPersistTaps).toBe('handled');
 });
 
 test('o Dashboard dispara o envio de carinho com feedback e pulso tátil', async () => {

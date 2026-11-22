@@ -6,10 +6,12 @@ import { Dock } from '../src/components/dock';
 import { FeedbackProvider } from '../src/components/feedback';
 import { useConfirm } from '../src/components/feedback-context';
 import { ExpressionControls } from '../src/components/robot-controls';
-import { Action, ConnectionLine, Screen, Selection, Toggle, Txt } from '../src/components/ui';
+import Settings from '../src/app/configuracoes';
+import { Action, Card, ConnectionLine, Screen, Selection, Toggle, Txt } from '../src/components/ui';
 
 vi.mock('react-native', () => ({
   Text: 'Text',
+  TextInput: 'TextInput',
   View: 'View',
   Modal: 'Modal',
   ScrollView: 'ScrollView',
@@ -26,6 +28,7 @@ vi.mock('react-native', () => ({
   StyleSheet: { create: (style: unknown) => style },
   useColorScheme: () => 'dark',
 }));
+vi.mock('expo-router', () => ({ useRouter: () => ({ navigate: vi.fn() }) }));
 vi.mock('@expo/vector-icons', () => ({ Ionicons: 'Ionicons' }));
 vi.mock('@react-native-async-storage/async-storage', () => ({ default: {} }));
 vi.mock('@react-native-community/slider', () => ({ default: 'Slider' }));
@@ -153,3 +156,25 @@ test('a contagem desce com o relógio e nunca fica negativa', () => {
   act(() => { vi.advanceTimersByTime(3500); });
   expect(JSON.stringify(component?.toJSON())).toContain('00:00:00');
 });
+
+test('a tela de ajustes permite filtrar cards por categoria de forma organizada', () => {
+  act(() => { component = create(<Settings />); });
+  const titles = () => component!.root.findAllByType(Card).map(card => card.props.title);
+
+  const redeBtn = component!.root.findAllByType(Selection).find(item => item.props.label.includes('Rede'))
+    ?? component!.root.findAllByType(Action).find(item => item.props.title?.includes('Rede'));
+  expect(redeBtn).toBeDefined();
+
+  act(() => redeBtn!.props.onPress());
+  expect(titles()).toContain('Endereço do Ciborgue');
+  expect(titles()).toContain('Wi-Fi do robô');
+  expect(titles()).not.toContain('Áudio');
+
+  const dispBtn = component!.root.findAllByType(Selection).find(item => item.props.label.includes('Dispositivo'))
+    ?? component!.root.findAllByType(Action).find(item => item.props.title?.includes('Dispositivo'));
+  act(() => dispBtn!.props.onPress());
+  expect(titles()).toContain('Áudio');
+  expect(titles()).toContain('Tela');
+  expect(titles()).not.toContain('Wi-Fi do robô');
+});
+

@@ -1,6 +1,6 @@
 import { Ionicons } from '@expo/vector-icons';
 import * as Haptics from 'expo-haptics';
-import { type ComponentProps, type ReactNode, useEffect, useRef, useState } from 'react';
+import { type ComponentProps, type ReactNode, useEffect, useMemo, useRef, useState } from 'react';
 import {
   ActivityIndicator, Animated, PanResponder, Pressable, RefreshControl, ScrollView, StyleSheet, Text, TextInput, View,
 } from 'react-native';
@@ -142,18 +142,15 @@ export function Screen({ title, icon, children, onRefresh, showConnection = true
   const c = usePalette();
   const insets = useSafeAreaInsets();
   const [pulling, setPulling] = useState(false);
-  const onBackRef = useRef(onBack);
-  onBackRef.current = onBack;
-
-  const panResponder = useRef(onBack ? PanResponder.create({
+  const panResponder = useMemo(() => onBack ? PanResponder.create({
     onMoveShouldSetPanResponder: (_, g) => g.x0 <= 40 && g.dx > 25 && Math.abs(g.dy) < 30,
     onPanResponderRelease: (_, g) => {
       if (g.dx > 60) {
         void Haptics.impactAsync?.(Haptics.ImpactFeedbackStyle.Light).catch(() => {});
-        onBackRef.current?.();
+        onBack();
       }
     },
-  }) : undefined).current;
+  }) : undefined, [onBack]);
 
   const paddingHorizontal = { paddingLeft: Math.max(18, insets.left), paddingRight: Math.max(18, insets.right) };
   return <View style={[styles.screen, { backgroundColor: c.bg }]} {...(panResponder?.panHandlers ?? {})}>

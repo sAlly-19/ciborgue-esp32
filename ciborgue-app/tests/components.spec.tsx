@@ -1,5 +1,5 @@
 import { act, create, type ReactTestRenderer } from 'react-test-renderer';
-import type { ComponentProps } from 'react';
+import { useEffect, type ComponentProps } from 'react';
 import { afterEach, expect, test, vi } from 'vitest';
 import { Countdown } from '../src/components/countdown';
 import { Dock } from '../src/components/dock';
@@ -8,6 +8,7 @@ import { useConfirm } from '../src/components/feedback-context';
 import { ExpressionControls } from '../src/components/robot-controls';
 import Settings from '../src/app/configuracoes';
 import Chat from '../src/app/chat';
+import Dashboard from '../src/app/index';
 import { Action, Card, ConnectionLine, Screen, Selection, Toggle, Txt } from '../src/components/ui';
 
 vi.mock('react-native', () => ({
@@ -19,7 +20,12 @@ vi.mock('react-native', () => ({
   RefreshControl: 'RefreshControl',
   Pressable: 'Pressable',
   Platform: { OS: 'web' },
-  Animated: { View: 'AnimatedView', Value: class { stopAnimation() {} setValue() {} } },
+  Animated: {
+    View: 'AnimatedView',
+    Value: class { stopAnimation() {} setValue() {} },
+    timing: () => ({ start: (cb?: () => void) => cb?.() }),
+    sequence: () => ({ start: (cb?: () => void) => cb?.() }),
+  },
   AccessibilityInfo: { isReduceMotionEnabled: async () => true, addEventListener: () => ({ remove() {} }) },
   Keyboard: { isVisible: () => false, addListener: (event: string, handler: () => void) => {
     keyboardListeners.set(event, handler);
@@ -32,14 +38,20 @@ vi.mock('react-native', () => ({
   StyleSheet: { create: (style: unknown) => style },
   useColorScheme: () => 'dark',
 }));
-vi.mock('expo-router', () => ({ useRouter: () => ({ navigate: vi.fn() }) }));
+vi.mock('expo-router', () => ({
+  useRouter: () => ({ navigate: vi.fn() }),
+  useFocusEffect: (cb: () => void) => {
+    useEffect(cb, [cb]);
+  },
+}));
 vi.mock('@expo/vector-icons', () => ({ Ionicons: 'Ionicons' }));
 vi.mock('@react-native-async-storage/async-storage', () => ({ default: {} }));
 vi.mock('@react-native-community/slider', () => ({ default: 'Slider' }));
+const hapticsImpact = vi.fn();
 vi.mock('expo-haptics', () => ({
   notificationAsync: async () => {},
   selectionAsync: async () => {},
-  impactAsync: async () => {},
+  impactAsync: async (...args: unknown[]) => { hapticsImpact(...args); },
   NotificationFeedbackType: { Success: 'success', Error: 'error' },
   ImpactFeedbackStyle: { Light: 'light', Medium: 'medium', Heavy: 'heavy' },
 }));
@@ -51,10 +63,14 @@ vi.mock('../src/stores/robot', () => ({
   useTelemetry: () => mockTelemetry,
   useRobot: (select: (state: typeof robotStatus) => unknown) => select(robotStatus),
   send: (...args: unknown[]) => sendCommand(...args),
+  read: vi.fn().mockResolvedValue({ pets: 5, chats: 2, label: 'Feliz' }),
+  errorText: (e: unknown) => (e instanceof Error ? e.message : String(e)),
 }));
 
 Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true });
-let mockConnection = { online: false, syncing: false, ready: true, error: 'Confira o Wi-Fi.' };
+let mockConnection: { host?: string; online: boolean; syncing: boolean; ready: boolean; error: string } = {
+  host: '192.168.1.50', online: false, syncing: false, ready: true, error: 'Confira o Wi-Fi.',
+};
 const robotStatus = { state: 'IDLE', emotion: 'NEUTRAL', revision: 2 };
 const sendCommand = vi.fn();
 const keyboardListeners = new Map<string, () => void>();
@@ -231,5 +247,17 @@ test('o Screen suporta gesto de deslizar da borda esquerda para voltar', () => {
 
   panConfig!.onPanResponderRelease!(null, { dx: 80 });
   expect(onBack).toHaveBeenCalledOnce();
+});
+
+test('o Dashboard dispara o envio de carinho com feedback e pulso tátil', async () => {
+  mockConnection = { online: true, syncing: false, ready: true, error: '' };
+  sendCommand.mockResolvedValue({});
+  act(() => { component = create(<FeedbackProvider><Dashboard /></FeedbackProvider>); });
+  const petButton = component!.root.findByProps({ accessibilityLabel: 'Carinho. Enviar agora' });
+  expect(petButton).toBeDefined();
+
+  await act(async () => { petButton.props.onPress(); });
+  expect(sendCommand).toHaveBeenCalledWith('pet');
+  expect(hapticsImpact).toHaveBeenCalledWith('medium');
 });
 

@@ -2,7 +2,7 @@ import { Ionicons } from '@expo/vector-icons';
 import * as Haptics from 'expo-haptics';
 import { type ComponentProps, type ReactNode, useEffect, useRef, useState } from 'react';
 import {
-  ActivityIndicator, Animated, Pressable, RefreshControl, ScrollView, StyleSheet, Text, TextInput, View,
+  ActivityIndicator, Animated, PanResponder, Pressable, RefreshControl, ScrollView, StyleSheet, Text, TextInput, View,
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { errorText, refresh, useConnectionValue } from '../stores/robot';
@@ -142,8 +142,21 @@ export function Screen({ title, icon, children, onRefresh, showConnection = true
   const c = usePalette();
   const insets = useSafeAreaInsets();
   const [pulling, setPulling] = useState(false);
+  const onBackRef = useRef(onBack);
+  onBackRef.current = onBack;
+
+  const panResponder = useRef(onBack ? PanResponder.create({
+    onMoveShouldSetPanResponder: (_, g) => g.x0 <= 40 && g.dx > 25 && Math.abs(g.dy) < 30,
+    onPanResponderRelease: (_, g) => {
+      if (g.dx > 60) {
+        void Haptics.impactAsync?.(Haptics.ImpactFeedbackStyle.Light).catch(() => {});
+        onBackRef.current?.();
+      }
+    },
+  }) : undefined).current;
+
   const paddingHorizontal = { paddingLeft: Math.max(18, insets.left), paddingRight: Math.max(18, insets.right) };
-  return <View style={[styles.screen, { backgroundColor: c.bg }]}>
+  return <View style={[styles.screen, { backgroundColor: c.bg }]} {...(panResponder?.panHandlers ?? {})}>
     <View style={[styles.header, { paddingTop: insets.top, backgroundColor: c.surface, borderBottomColor: c.line }]}>
       <View style={[styles.headerRow, paddingHorizontal]}>
         {onBack ? <Pressable accessibilityRole="button" accessibilityLabel={backLabel} onPress={onBack}

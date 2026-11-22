@@ -26,6 +26,9 @@ vi.mock('react-native', () => ({
     return { remove: () => keyboardListeners.delete(event) };
   } },
   ActivityIndicator: 'ActivityIndicator',
+  PanResponder: {
+    create: (config: unknown) => ({ panHandlers: { _panConfig: config } }),
+  },
   StyleSheet: { create: (style: unknown) => style },
   useColorScheme: () => 'dark',
 }));
@@ -210,5 +213,23 @@ test('o Chat exibe chips deslizantes de atalho que preenchem a mensagem ao tocar
   act(() => chip!.props.onPress());
   const input = component!.root.findByProps({ accessibilityLabel: 'Mensagem' });
   expect(input.props.value).toBe('Como você está?');
+});
+
+test('o Screen suporta gesto de deslizar da borda esquerda para voltar', () => {
+  const onBack = vi.fn();
+  act(() => {
+    component = create(<Screen title="Detalhes" onBack={onBack}><Txt>Conteúdo</Txt></Screen>);
+  });
+  const root = component!.root.children[0] as unknown as { props: { _panConfig?: {
+    onMoveShouldSetPanResponder?: (e: unknown, g: { x0: number; dx: number; dy: number }) => boolean;
+    onPanResponderRelease?: (e: unknown, g: { dx: number }) => void;
+  } } };
+  const panConfig = root.props._panConfig;
+  expect(panConfig).toBeDefined();
+  expect(panConfig!.onMoveShouldSetPanResponder!(null, { x0: 20, dx: 35, dy: 5 })).toBe(true);
+  expect(panConfig!.onMoveShouldSetPanResponder!(null, { x0: 120, dx: 35, dy: 5 })).toBe(false);
+
+  panConfig!.onPanResponderRelease!(null, { dx: 80 });
+  expect(onBack).toHaveBeenCalledOnce();
 });
 

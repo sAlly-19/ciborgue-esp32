@@ -34,10 +34,11 @@ vi.mock('@react-native-async-storage/async-storage', () => ({ default: {} }));
 vi.mock('@react-native-community/slider', () => ({ default: 'Slider' }));
 vi.mock('expo-haptics', () => ({ notificationAsync: async () => {}, NotificationFeedbackType: { Success: 'success', Error: 'error' } }));
 vi.mock('react-native-safe-area-context', () => ({ useSafeAreaInsets: () => ({ top: 0, bottom: 0, left: 0, right: 0 }) }));
+let mockTelemetry: { data?: { timerTotal?: number; pomo?: boolean; ringing?: boolean }; receivedAt?: number } | null = null;
 vi.mock('../src/stores/robot', () => ({
   useConnection: () => mockConnection,
   useConnectionValue: (select: (state: typeof mockConnection) => unknown) => select(mockConnection),
-  useTelemetry: () => null,
+  useTelemetry: () => mockTelemetry,
   useRobot: (select: (state: typeof robotStatus) => unknown) => select(robotStatus),
   send: (...args: unknown[]) => sendCommand(...args),
 }));
@@ -176,5 +177,18 @@ test('a tela de ajustes permite filtrar cards por categoria de forma organizada'
   expect(titles()).toContain('Áudio');
   expect(titles()).toContain('Tela');
   expect(titles()).not.toContain('Wi-Fi do robô');
+});
+
+test('o Dock exibe indicador de atividade na aba Rotina quando houver timer ou alarme ativo', async () => {
+  mockTelemetry = { data: { timerTotal: 120 } };
+  const routes = ['index', 'tempo', 'chat', 'configuracoes'].map(name => ({ key: name, name }));
+  const props = {
+    state: { index: 0, routes },
+    navigation: { navigate: vi.fn(), emit: () => ({ defaultPrevented: false }) },
+  } as unknown as ComponentProps<typeof Dock>;
+  await act(async () => { component = create(<Dock {...props} />); });
+  const tempoTab = component!.root.findByProps({ accessibilityRole: 'tab', accessibilityLabel: 'Rotina (Atividade ativa)' });
+  expect(tempoTab).toBeDefined();
+  mockTelemetry = null;
 });
 

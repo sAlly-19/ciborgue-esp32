@@ -1,8 +1,8 @@
 import { Ionicons } from '@expo/vector-icons';
 import * as Haptics from 'expo-haptics';
-import { type ComponentProps, type ReactNode, useEffect, useRef, useState } from 'react';
+import { type ComponentProps, type ReactNode, useEffect, useMemo, useRef, useState } from 'react';
 import {
-  ActivityIndicator, Animated, Pressable, RefreshControl, ScrollView, StyleSheet, Text, TextInput, View,
+  ActivityIndicator, Animated, PanResponder, Pressable, RefreshControl, ScrollView, StyleSheet, Text, TextInput, View,
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { errorText, refresh, useConnectionValue } from '../stores/robot';
@@ -22,9 +22,9 @@ export function Row({ children }: { children: ReactNode }) {
 export function Grid({ children }: { children: ReactNode }) {
   return <View style={styles.grid}>{children}</View>;
 }
-export function Card({ title, children }: { title: string; children: ReactNode }) {
+export function Card({ title, children, style }: { title: string; children: ReactNode; style?: ComponentProps<typeof View>['style'] }) {
   const c = usePalette();
-  return <View style={[styles.card, { backgroundColor: c.surface, borderColor: c.line }]}>
+  return <View style={[styles.card, { backgroundColor: c.surface, borderColor: c.line }, style]}>
     <Txt style={styles.cardTitle}>{title}</Txt>{children}
   </View>;
 }
@@ -142,8 +142,21 @@ export function Screen({ title, icon, children, onRefresh, showConnection = true
   const c = usePalette();
   const insets = useSafeAreaInsets();
   const [pulling, setPulling] = useState(false);
+  const panResponder = useMemo(() => onBack ? PanResponder.create({
+    onMoveShouldSetPanResponder: (_, g) => {
+      const startX = g.moveX !== undefined ? g.moveX - g.dx : g.x0;
+      return startX <= 40 && g.dx > 25 && Math.abs(g.dy) < 30;
+    },
+    onPanResponderRelease: (_, g) => {
+      if (g.dx > 60 && Math.abs(g.dy) < 50) {
+        void Haptics.impactAsync?.(Haptics.ImpactFeedbackStyle.Light).catch(() => {});
+        onBack();
+      }
+    },
+  }) : undefined, [onBack]);
+
   const paddingHorizontal = { paddingLeft: Math.max(18, insets.left), paddingRight: Math.max(18, insets.right) };
-  return <View style={[styles.screen, { backgroundColor: c.bg }]}>
+  return <View style={[styles.screen, { backgroundColor: c.bg }]} {...(panResponder?.panHandlers ?? {})}>
     <View style={[styles.header, { paddingTop: insets.top, backgroundColor: c.surface, borderBottomColor: c.line }]}>
       <View style={[styles.headerRow, paddingHorizontal]}>
         {onBack ? <Pressable accessibilityRole="button" accessibilityLabel={backLabel} onPress={onBack}

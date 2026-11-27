@@ -1,46 +1,76 @@
 import { act, create, type ReactTestRenderer } from 'react-test-renderer';
-import type { ComponentProps } from 'react';
+import { useEffect, type ComponentProps } from 'react';
 import { afterEach, expect, test, vi } from 'vitest';
 import { Countdown } from '../src/components/countdown';
 import { Dock } from '../src/components/dock';
 import { FeedbackProvider } from '../src/components/feedback';
 import { useConfirm } from '../src/components/feedback-context';
 import { ExpressionControls } from '../src/components/robot-controls';
-import { Action, ConnectionLine, Screen, Selection, Toggle, Txt } from '../src/components/ui';
+import Settings from '../src/app/configuracoes';
+import Chat from '../src/app/chat';
+import Dashboard from '../src/app/index';
+import { Action, Card, ConnectionLine, Screen, Selection, Toggle, Txt } from '../src/components/ui';
 
 vi.mock('react-native', () => ({
   Text: 'Text',
+  TextInput: 'TextInput',
   View: 'View',
   Modal: 'Modal',
   ScrollView: 'ScrollView',
   RefreshControl: 'RefreshControl',
   Pressable: 'Pressable',
   Platform: { OS: 'web' },
-  Animated: { View: 'AnimatedView', Value: class { stopAnimation() {} setValue() {} } },
+  Animated: {
+    View: 'AnimatedView',
+    Value: class { stopAnimation() {} setValue() {} },
+    timing: () => ({ start: (cb?: () => void) => cb?.() }),
+    sequence: () => ({ start: (cb?: () => void) => cb?.() }),
+  },
   AccessibilityInfo: { isReduceMotionEnabled: async () => true, addEventListener: () => ({ remove() {} }) },
   Keyboard: { isVisible: () => false, addListener: (event: string, handler: () => void) => {
     keyboardListeners.set(event, handler);
     return { remove: () => keyboardListeners.delete(event) };
   } },
   ActivityIndicator: 'ActivityIndicator',
+  PanResponder: {
+    create: (config: unknown) => ({ panHandlers: { _panConfig: config } }),
+  },
   StyleSheet: { create: (style: unknown) => style },
   useColorScheme: () => 'dark',
+}));
+vi.mock('expo-router', () => ({
+  useRouter: () => ({ navigate: vi.fn() }),
+  useFocusEffect: (cb: () => void) => {
+    useEffect(cb, [cb]);
+  },
 }));
 vi.mock('@expo/vector-icons', () => ({ Ionicons: 'Ionicons' }));
 vi.mock('@react-native-async-storage/async-storage', () => ({ default: {} }));
 vi.mock('@react-native-community/slider', () => ({ default: 'Slider' }));
-vi.mock('expo-haptics', () => ({ notificationAsync: async () => {}, NotificationFeedbackType: { Success: 'success', Error: 'error' } }));
+const hapticsImpact = vi.fn();
+vi.mock('expo-haptics', () => ({
+  notificationAsync: async () => {},
+  selectionAsync: async () => {},
+  impactAsync: async (...args: unknown[]) => { hapticsImpact(...args); },
+  NotificationFeedbackType: { Success: 'success', Error: 'error' },
+  ImpactFeedbackStyle: { Light: 'light', Medium: 'medium', Heavy: 'heavy' },
+}));
 vi.mock('react-native-safe-area-context', () => ({ useSafeAreaInsets: () => ({ top: 0, bottom: 0, left: 0, right: 0 }) }));
+let mockTelemetry: { data?: { timerTotal?: number; pomo?: boolean; ringing?: boolean }; receivedAt?: number } | null = null;
 vi.mock('../src/stores/robot', () => ({
   useConnection: () => mockConnection,
   useConnectionValue: (select: (state: typeof mockConnection) => unknown) => select(mockConnection),
-  useTelemetry: () => null,
+  useTelemetry: () => mockTelemetry,
   useRobot: (select: (state: typeof robotStatus) => unknown) => select(robotStatus),
   send: (...args: unknown[]) => sendCommand(...args),
+  read: vi.fn().mockResolvedValue({ pets: 5, chats: 2, label: 'Feliz' }),
+  errorText: (e: unknown) => (e instanceof Error ? e.message : String(e)),
 }));
 
 Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true });
-let mockConnection = { online: false, syncing: false, ready: true, error: 'Confira o Wi-Fi.' };
+let mockConnection: { host?: string; online: boolean; syncing: boolean; ready: boolean; error: string } = {
+  host: '192.168.1.50', online: false, syncing: false, ready: true, error: 'Confira o Wi-Fi.',
+};
 const robotStatus = { state: 'IDLE', emotion: 'NEUTRAL', revision: 2 };
 const sendCommand = vi.fn();
 const keyboardListeners = new Map<string, () => void>();
@@ -153,3 +183,91 @@ test('a contagem desce com o relógio e nunca fica negativa', () => {
   act(() => { vi.advanceTimersByTime(3500); });
   expect(JSON.stringify(component?.toJSON())).toContain('00:00:00');
 });
+
+test('a tela de ajustes permite filtrar cards por categoria de forma organizada', () => {
+  act(() => { component = create(<Settings />); });
+  const visibleTitles = () => component!.root.findAllByType(Card)
+    .filter(card => card.props.style?.display !== 'none')
+    .map(card => card.props.title);
+
+  const redeBtn = component!.root.findAllByType(Selection).find(item => item.props.label.includes('Rede'))
+    ?? component!.root.findAllByType(Action).find(item => item.props.title?.includes('Rede'));
+  expect(redeBtn).toBeDefined();
+
+  act(() => redeBtn!.props.onPress());
+  expect(visibleTitles()).toContain('Endereço do Ciborgue');
+  expect(visibleTitles()).toContain('Wi-Fi do robô');
+  expect(visibleTitles()).not.toContain('Áudio');
+
+  const dispBtn = component!.root.findAllByType(Selection).find(item => item.props.label.includes('Dispositivo'))
+    ?? component!.root.findAllByType(Action).find(item => item.props.title?.includes('Dispositivo'));
+  act(() => dispBtn!.props.onPress());
+  expect(visibleTitles()).toContain('Áudio');
+  expect(visibleTitles()).toContain('Tela');
+  expect(visibleTitles()).not.toContain('Wi-Fi do robô');
+});
+
+test('o Dock exibe indicador de atividade na aba Rotina quando houver timer ou alarme ativo', async () => {
+  mockTelemetry = { data: { timerTotal: 120 } };
+  const routes = ['index', 'tempo', 'chat', 'configuracoes'].map(name => ({ key: name, name }));
+  const props = {
+    state: { index: 0, routes },
+    navigation: { navigate: vi.fn(), emit: () => ({ defaultPrevented: false }) },
+  } as unknown as ComponentProps<typeof Dock>;
+  await act(async () => { component = create(<Dock {...props} />); });
+  const tempoTab = component!.root.findByProps({ accessibilityRole: 'tab', accessibilityLabel: 'Rotina (Atividade ativa)' });
+  expect(tempoTab).toBeDefined();
+  mockTelemetry = null;
+});
+
+test('o Chat exibe chips deslizantes de atalho que preenchem a mensagem ao tocar', () => {
+  act(() => { component = create(<FeedbackProvider><Chat /></FeedbackProvider>); });
+  const scroll = component!.root.findByProps({ accessibilityLabel: 'Sugestões de perguntas rápidas' });
+  expect(scroll.props.horizontal).toBe(true);
+
+  const chip = component!.root.findAllByProps({ accessibilityRole: 'button' }).find(item => item.props.accessibilityLabel === 'Como você está?');
+  expect(chip).toBeDefined();
+
+  act(() => chip!.props.onPress());
+  const input = component!.root.findByProps({ accessibilityLabel: 'Mensagem' });
+  expect(input.props.value).toBe('Como você está?');
+});
+
+test('o Screen suporta gesto de deslizar da borda esquerda para voltar', () => {
+  const onBack = vi.fn();
+  act(() => {
+    component = create(<Screen title="Detalhes" onBack={onBack}><Txt>Conteúdo</Txt></Screen>);
+  });
+  const root = component!.root.children[0] as unknown as { props: { _panConfig?: {
+    onMoveShouldSetPanResponder?: (e: unknown, g: { x0: number; moveX?: number; dx: number; dy: number }) => boolean;
+    onPanResponderRelease?: (e: unknown, g: { dx: number; dy?: number }) => void;
+  } } };
+  const panConfig = root.props._panConfig;
+  expect(panConfig).toBeDefined();
+  // Valid edge touch: moveX 55, dx 30 -> startX is 25 <= 40
+  expect(panConfig!.onMoveShouldSetPanResponder!(null, { x0: 0, moveX: 55, dx: 30, dy: 5 })).toBe(true);
+  // Mid-screen touch where x0 might be 0 prior to grant, but moveX is 150, dx 30 -> startX is 120 > 40
+  expect(panConfig!.onMoveShouldSetPanResponder!(null, { x0: 0, moveX: 150, dx: 30, dy: 5 })).toBe(false);
+
+  panConfig!.onPanResponderRelease!(null, { dx: 80, dy: 5 });
+  expect(onBack).toHaveBeenCalledOnce();
+});
+
+test('o Chat configura keyboardShouldPersistTaps handled no ScrollView de chips', () => {
+  act(() => { component = create(<FeedbackProvider><Chat /></FeedbackProvider>); });
+  const scroll = component!.root.findByProps({ accessibilityLabel: 'Sugestões de perguntas rápidas' });
+  expect(scroll.props.keyboardShouldPersistTaps).toBe('handled');
+});
+
+test('o Dashboard dispara o envio de carinho com feedback e pulso tátil', async () => {
+  mockConnection = { online: true, syncing: false, ready: true, error: '' };
+  sendCommand.mockResolvedValue({});
+  act(() => { component = create(<FeedbackProvider><Dashboard /></FeedbackProvider>); });
+  const petButton = component!.root.findByProps({ accessibilityLabel: 'Carinho. Enviar agora' });
+  expect(petButton).toBeDefined();
+
+  await act(async () => { petButton.props.onPress(); });
+  expect(sendCommand).toHaveBeenCalledWith('pet');
+  expect(hapticsImpact).toHaveBeenCalledWith('medium');
+});
+

@@ -1,8 +1,9 @@
 import { useConfirm } from '../components/feedback-context';
 import { Ionicons } from '@expo/vector-icons';
+import * as Haptics from 'expo-haptics';
 import { useRouter } from 'expo-router';
-import { useState } from 'react';
-import { Pressable, StyleSheet, View } from 'react-native';
+import { useEffect, useState } from 'react';
+import { AccessibilityInfo, Animated, Pressable, StyleSheet, View } from 'react-native';
 import { ack, personality } from '../api/protocol';
 import { Countdown } from '../components/countdown';
 import { AudioControls, ExpressionControls, LedControls } from '../components/robot-controls';
@@ -29,13 +30,19 @@ export default function Dashboard() {
   const s = snapshot?.data;
   return <Screen title="Ciborgue" icon="hardware-chip-outline" onRefresh={p.reload}
     onConnectionPress={() => router.navigate('/configuracoes')}>
-    <View style={[styles.telemetry, { backgroundColor: c.surface }]}>
+    <View
+      accessibilityRole="summary"
+      accessibilityLabel={`Telemetria do robô: Estado ${s ? label(states, s.state) : 'indisponível'}, Emoção ${s ? label(emotions, s.emotion) : 'indisponível'}, Afeto ${metric(s?.affection ?? NaN, '%')}`}
+      style={[styles.telemetry, { backgroundColor: c.surface }]}>
       <Reading title="Estado" value={s ? label(states, s.state) : '—'} />
       <Reading title="Emoção" value={s ? label(emotions, s.emotion) : '—'} />
       <Reading title="Afeto" value={metric(s?.affection ?? NaN, '%')} />
     </View>
     <View style={styles.shortcuts}>
-      <Shortcut icon="heart-outline" title="Carinho" detail="Enviar agora" disabled={disabled} onPress={() => void a.run(() => send('pet'), 'Carinho enviado.')} />
+      <Shortcut icon="heart-outline" title="Carinho" detail="Enviar agora" disabled={disabled} onPress={() => {
+        void Haptics.impactAsync?.(Haptics.ImpactFeedbackStyle.Medium).catch(() => {});
+        void a.run(() => send('pet'), 'Carinho enviado.');
+      }} />
       <Shortcut icon="happy-outline" title="Expressões" detail="Rosto e estado" onPress={() => setPanel('Expressões')} />
       <Shortcut icon="color-palette-outline" title="LED" detail={s ? 'Cor e efeitos' : 'Sem leitura'} color={s && rgb(s.rgb)} onPress={() => setPanel('LED')} />
       <Shortcut icon="volume-medium-outline" title="Áudio" detail={s ? s.mute ? 'Mudo' : `Volume ${s.volume}%` : 'Volume e sons'} onPress={() => setPanel('Áudio')} />
@@ -87,10 +94,33 @@ function Shortcut({ icon, title, detail, color, disabled, onPress }: {
   icon: IconName; title: string; detail: string; color?: string; disabled?: boolean; onPress: () => void;
 }) {
   const c = usePalette();
-  return <Pressable accessibilityRole="button" accessibilityState={{ disabled }} disabled={disabled} onPress={onPress}
+  const [scale] = useState(() => new Animated.Value(1));
+  const [reduced, setReduced] = useState(true);
+  useEffect(() => {
+    let mounted = true;
+    void AccessibilityInfo.isReduceMotionEnabled().then(value => { if (mounted) setReduced(value); }).catch(() => {});
+    const sub = AccessibilityInfo.addEventListener('reduceMotionChanged', setReduced);
+    return () => { mounted = false; sub.remove(); };
+  }, []);
+  const animatePulse = () => {
+    if (reduced) return;
+    Animated.sequence([
+      Animated.timing(scale, { toValue: 1.25, duration: 150, useNativeDriver: true }),
+      Animated.timing(scale, { toValue: 1, duration: 150, useNativeDriver: true }),
+    ]).start();
+  };
+  const handlePress = () => {
+    animatePulse();
+    onPress();
+  };
+  return <Pressable accessibilityRole="button" accessibilityLabel={`${title}. ${detail}`} accessibilityState={{ disabled }} disabled={disabled} onPress={handlePress}
     style={({ pressed }) => [styles.tile, { backgroundColor: c.surface, opacity: disabled || pressed ? 0.65 : 1 }]}>
-    <View style={styles.tileTop}><Ionicons name={icon} color={c.accent} size={24} />
-      {!!color && <View style={[styles.dot, { backgroundColor: color, borderWidth: 1, borderColor: c.line }]} />}</View>
+    <View style={styles.tileTop}>
+      <Animated.View style={{ transform: [{ scale }] }}>
+        <Ionicons name={icon} color={c.accent} size={24} />
+      </Animated.View>
+      {!!color && <View style={[styles.dot, { backgroundColor: color, borderWidth: 1, borderColor: c.line }]} />}
+    </View>
     <Txt style={styles.tileTitle}>{title}</Txt><Txt muted style={styles.small}>{detail}</Txt>
   </Pressable>;
 }

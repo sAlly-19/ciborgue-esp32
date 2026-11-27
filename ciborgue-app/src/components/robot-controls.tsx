@@ -1,4 +1,5 @@
 import { Ionicons } from '@expo/vector-icons';
+import * as Haptics from 'expo-haptics';
 import { useState } from 'react';
 import { Pressable, View } from 'react-native';
 import { ApiError, integer } from '../api/protocol';
@@ -43,9 +44,15 @@ export function ExpressionControls() {
       </Row>
     </View>
     <Txt muted>Estado</Txt>
-    <Choices<keyof typeof states> items={states} selected={selectedState ?? ''} disabledKeys={revision < 2 ? ['BOOT'] : undefined} onSelect={setState} />
+    <Choices<keyof typeof states> items={states} selected={selectedState ?? ''} disabledKeys={revision < 2 ? ['BOOT'] : undefined} onSelect={value => {
+      setState(value);
+      void Haptics.selectionAsync?.().catch(() => {});
+    }} />
     <Txt muted>Emoção</Txt>
-    <Choices items={available} selected={selectedEmotion ?? ''} onSelect={setEmotion} />
+    <Choices items={available} selected={selectedEmotion ?? ''} onSelect={value => {
+      setEmotion(value);
+      void Haptics.selectionAsync?.().catch(() => {});
+    }} />
     <Notice text={a.notice} failed={a.failed} />
     <Action title={a.failed ? 'Tentar novamente' : 'Aplicar'} active pending={a.pending} disabled={disabled || (!nextState && !nextEmotion)}
       onPress={() => void a.run(async () => {

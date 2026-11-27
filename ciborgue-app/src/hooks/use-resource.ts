@@ -33,7 +33,7 @@ export function useResource<T>(path: string, decode: Decoder<T>) {
   }, [online, reload]));
 
   return {
-    value: entry?.host === host ? entry.value : undefined,
+    value: entry && entry.host === host ? entry.value : undefined,
     reload, error, pending,
     setValue(value: T) {
       current.current?.abort();
